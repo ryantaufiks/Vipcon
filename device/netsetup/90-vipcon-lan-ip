@@ -1,0 +1,9 @@
+#!/bin/sh
+# NetworkManager dispatcher: when the LAN address may have changed, refresh what depends on it
+# (local certificate, LiveKit node IP, Caddy and dnsmasq config). Never for the setup hotspot.
+IFACE="$1"; ACTION="$2"
+case "$IFACE" in tailscale*|docker*|veth*|br-*|lo) exit 0 ;; esac
+[ "$CONNECTION_ID" = "vipcon-setup" ] && exit 0
+case "$ACTION" in up|dhcp4-change) ;; *) exit 0 ;; esac
+[ -x /opt/appliance/apply-lan-ip.sh ] || exit 0
+( sleep 3; /opt/appliance/apply-lan-ip.sh ) >/dev/null 2>&1 &

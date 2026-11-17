@@ -36,7 +36,17 @@ install -m 755 "$SRC/provisioning/first-boot.sh" "$SRC/provisioning/factory-rese
 rm -rf "${OPT:?}/web/"*
 cp -a "$SRC/web/dist/." "$OPT/web/"
 install -m 644 "$SRC/systemd/appliance.service" /etc/systemd/system/appliance.service
+
+echo "== network setup (Wi-Fi hotspot when offline, LAN IP follow-up)"
+install -d -m 755 "$OPT/netsetup" /etc/NetworkManager/dnsmasq-shared.d /etc/NetworkManager/dispatcher.d
+install -m 644 "$SRC/netsetup/netsetup.py" "$OPT/netsetup/netsetup.py"
+install -m 644 "$SRC/netsetup/vipcon-netsetup.service" /etc/systemd/system/vipcon-netsetup.service
+install -m 644 "$SRC/netsetup/vipcon-captive.conf" /etc/NetworkManager/dnsmasq-shared.d/vipcon-captive.conf
+install -m 755 "$SRC/netsetup/90-vipcon-lan-ip" /etc/NetworkManager/dispatcher.d/90-vipcon-lan-ip
+install -m 755 "$SRC/provisioning/apply-lan-ip.sh" "$OPT/apply-lan-ip.sh"
 systemctl daemon-reload
+systemctl enable vipcon-netsetup.service >/dev/null
+systemctl restart vipcon-netsetup.service
 
 if [ -n "$JSON" ]; then
     install -m 600 "$JSON" "$BOOT_JSON"

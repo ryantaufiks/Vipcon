@@ -60,3 +60,24 @@ def test_splash_cache_matches_framebuffer_size(tmp_path, monkeypatch):
     r.set_state(dict(BASE, claimed=True))
     kiosk.save_splash(fb, r)
     assert (tmp_path / "splash.raw").stat().st_size == fb.stride * fb.height  # what splash.sh checks
+
+
+@pytest.mark.parametrize("mode", ["setup", "failed", "connecting", "connected"])
+def test_wifi_setup_screens(mode):
+    net = {"mode": mode, "ap_ssid": "Vipcon-Setup-7EDA", "ap_password": "k7mq2xr9tp", "target_ssid": "Office",
+           "network": "Office", "ip": "192.168.10.42", "error": "Could not join Office: the password looks wrong.",
+           "updated_at": __import__("time").time()}
+    assert kiosk.netsetup_active(net)
+    r = kiosk.Renderer(480, 320)
+    r.set_state(dict(BASE, net=net))
+    screen = r.network()
+    if mode in ("setup", "failed"):
+        want = "WIFI:T:WPA;S:Vipcon-Setup-7EDA;P:k7mq2xr9tp;;"
+        assert want in decoded(screen)
+        assert want in decoded(screen.resize((288, 192), Image.LANCZOS))
+
+
+def test_wifi_qr_escapes_special_characters():
+    assert kiosk.wifi_qr_payload('Cafe;"A"', "p:w,d\\") == 'WIFI:T:WPA;S:Cafe\\;\\"A\\";P:p\\:w\\,d\\\\;;'
+    assert not kiosk.netsetup_active({"mode": "online"})
+    assert not kiosk.netsetup_active({"mode": "connected", "updated_at": 0})

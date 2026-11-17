@@ -58,6 +58,10 @@ jobs:
         run: python -m py_compile device/agent/main.py device/app/*.py device/kiosk/kiosk.py
       - name: Shell scripts parse
         run: for f in device/kiosk/*.sh device/provisioning/*.sh; do bash -n "$f"; done
+      - name: Network setup tests
+        run: |
+          pip install pytest
+          pytest -q device/netsetup
       - name: Device app tests
         run: |
           pip install -r device/app/requirements.txt pytest httpx

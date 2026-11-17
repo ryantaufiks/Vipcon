@@ -24,6 +24,7 @@ import json
 import math
 import os
 import random
+import re
 import select
 import signal
 import socket
@@ -47,6 +48,8 @@ STATE_POLL = 5
 # Ready-to-blit splash frame, shown by a udev rule the moment the LCD driver registers
 # /dev/fb0 on the next boot (see splash.sh), long before Python could start.
 SPLASH_FILE = os.environ.get("KIOSK_SPLASH_FILE", "/var/cache/vipcon-kiosk/splash.raw")
+NETSETUP_STATE = os.environ.get("KIOSK_NETSETUP_STATE", "/run/vipcon-netsetup/state.json")
+CONNECTED_NOTICE = 20  # seconds the "Online" screen stays up after Wi-Fi setup succeeds
 FULL_REPAINT = 3  # seconds
 
 BG = (6, 8, 12)
@@ -98,6 +101,27 @@ def live_meetings():
         return None
 
 
+def load_netsetup():
+    try:
+        with open(NETSETUP_STATE) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
+
+
+def netsetup_active(net):
+    mode = net.get("mode")
+    if mode in ("setup", "failed", "connecting"):
+        return True
+    return mode == "connected" and time.time() - net.get("updated_at", 0) < CONNECTED_NOTICE
+
+
+def wifi_qr_payload(ssid, password):
+    """The standard Wi-Fi QR format phones join from their camera app."""
+    esc = lambda v: re.sub(r'([\\;,:"])', r"\\\1", v)  # noqa: E731
+    return f"WIFI:T:WPA;S:{esc(ssid)};P:{esc(password)};;"
+
+
 def load_state():
     try:
         remote = json.loads(read(os.path.join(KIOSK_DIR, "state.json"), "{}") or "{}")
@@ -121,6 +145,7 @@ def load_state():
         "tagline": (remote.get("tagline") or "").strip()[:40],
         "lan_ip": lan_ip(),
         "live_meetings": live_meetings() if claimed else None,
+        "net": load_netsetup(),
         "logo_path": logo_path,
         "logo_mtime": logo_mtime,
     }
@@ -392,7 +417,12 @@ def qr_card(text, size, radius, accent):
     card = Image.new("RGBA", (size, size), (0, 0, 0, 0))
     ImageDraw.Draw(card).rounded_rectangle([0, 0, size - 1, size - 1], radius=radius, fill=(255, 255, 255, 255))
     inner = int(size * 0.84)
-    qr = modern_qr(text, inner, eye=mix(accent, 0.8, (0, 0, 0)), badge_color=accent)
+    # Finder eyes carry the accent, but must stay dark enough for scanners to see them.
+    eye, k = accent, 1.0
+    while 0.299 * eye[0] + 0.587 * eye[1] + 0.114 * eye[2] > 70 and k > 0.2:
+        k -= 0.05
+        eye = tuple(int(c * k) for c in accent)
+    qr = modern_qr(text, inner, eye=eye, badge_color=accent)
     card.paste(qr, ((size - inner) // 2, (size - inner) // 2), qr)
     return card
 
@@ -574,6 +604,8 @@ class Renderer:
                 d.text((tx, ty), line, font=mf, fill=mix(MUTED, 0.95))
                 ty += int(mf.size * 1.3)
 
+        if remaining is None:  # screens that stay until something happens: no countdown
+            return img
         # Countdown: a thin bar that empties, with the hint above it.
         d.text((tx, hint_y), "Tap anywhere to go back", font=hf, fill=MUTED)
         d.rounded_rectangle([tx, bar_y, tx + tw, bar_y + 3], radius=2, fill=mix(MUTED, 0.25))
@@ -581,6 +613,29 @@ class Renderer:
         if left > 0:
             d.rounded_rectangle([tx, bar_y, tx + max(4, int(tw * left)), bar_y + 3], radius=2, fill=status_color)
         return img
+
+    def network(self):
+        """Wi-Fi setup screens, driven by device/netsetup (shown instead of everything else)."""
+        net = self.state.get("net") or {}
+        mode = net.get("mode")
+        if mode == "connecting":
+            return self._panel("Connecting", ACCENT, "Connecting…",
+                               [(f"Joining {net.get('target_ssid', 'the network')}.", FG),
+                                ("This can take up to a minute.", MUTED)], None)
+        if mode == "connected":
+            body = [(f"Connected to {net['network']}." if net.get("network") else "Network connected.", FG)]
+            return self._panel("Online", GREEN, "Vipcon is online", body, None,
+                               meta=[f"IP {net['ip']}"] if net.get("ip") else ())
+        ssid, password = net.get("ap_ssid", ""), net.get("ap_password", "")
+        if mode == "failed":
+            body = [(net.get("error") or "Could not connect.", WARN),
+                    ("Scan to try again.", FG)]
+        else:
+            body = [("1. Scan to join the setup network.", FG),
+                    ("2. Pick your office Wi-Fi on the page that opens.", mix(FG, 0.8))]
+        return self._panel("Try again" if mode == "failed" else "Wi-Fi setup", WARN if mode == "failed" else ACCENT,
+                           "Connect to Wi-Fi", body, None, qr_text=wifi_qr_payload(ssid, password),
+                           meta=[ssid, f"Pass {password}"])
 
     def detail(self, remaining):
         st = self.state
@@ -755,6 +810,7 @@ def run():
     mode, mode_since, last_poll = "saver", time.time(), 0
     frames, frames_key, band = [], None, (0, fb.height)
     splash_key = None
+    net_shown = None
     detail_shown = None
     i = 0
     try:
@@ -762,6 +818,18 @@ def run():
             if time.time() - last_poll >= STATE_POLL:
                 renderer.set_state(load_state())
                 last_poll = time.time()
+            net = renderer.state.get("net") or {}
+            if netsetup_active(net):
+                # Wi-Fi setup owns the screen; refresh when its state changes.
+                net_key = (net.get("mode"), net.get("updated_at"))
+                if net_key != net_shown:
+                    fb.show(fb.encode(renderer.network()))
+                    net_shown = net_key
+                touch.wait(0.5)
+                last_poll = min(last_poll, time.time() - STATE_POLL + 1)  # poll every second here
+                mode, frames_key = "saver", None
+                continue
+            net_shown = None
             if mode == "saver":
                 key = renderer.cache.get("key")
                 if key != frames_key:
@@ -805,9 +873,15 @@ def preview(out_dir, width, height):
         "claimed": False, "license_status": None, "client_name": None, "lan_ip": "192.168.1.23",
         "tagline": os.environ.get("KIOSK_PREVIEW_TAGLINE", ""),
         "live_meetings": 2,
+        "net": {},
         "logo_path": os.environ.get("KIOSK_PREVIEW_LOGO"), "logo_mtime": 0,
     }
     cases = {
+        "wifi-setup": {"net": {"mode": "setup", "ap_ssid": "Vipcon-Setup-7EDA", "ap_password": "k7mq2xr9tp"}},
+        "wifi-failed": {"net": {"mode": "failed", "ap_ssid": "Vipcon-Setup-7EDA", "ap_password": "k7mq2xr9tp",
+                                "error": "Could not join Office-5G: the password looks wrong."}},
+        "wifi-connecting": {"net": {"mode": "connecting", "target_ssid": "Office-5G"}},
+        "wifi-online": {"net": {"mode": "connected", "network": "Office-5G", "ip": "192.168.10.42"}},
         "saver": {}, "unclaimed": {},
         "claimed": {"claimed": True, "license_status": "active", "client_name": "Example Holdings Pte Ltd"},
         "inactive": {"claimed": True, "license_status": "expired"},
@@ -815,7 +889,10 @@ def preview(out_dir, width, height):
     for name, extra in cases.items():
         r = Renderer(width, height)
         r.set_state(dict(base, **extra))
-        imgs = [r.screensaver(0.5), r.splash("Starting…")] if name == "saver" else [r.detail(42)]
+        if name.startswith("wifi-"):
+            imgs = [r.network()]
+        else:
+            imgs = [r.screensaver(0.5), r.splash("Starting…")] if name == "saver" else [r.detail(42)]
         if name == "inactive":
             imgs.insert(0, r.screensaver(0.5))
         for n, img in enumerate(imgs):
