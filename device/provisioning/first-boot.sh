@@ -42,6 +42,7 @@ HOSTNAME=$(hostname)
 LIVEKIT_KEY="lk_$(openssl rand -hex 8)"
 LIVEKIT_SECRET=$(openssl rand -hex 32)
 SESSION_SECRET=$(openssl rand -hex 32)
+echo "$LAN_IP" > "$ETC/lan_ip"   # apply-lan-ip.sh compares against this
 echo -n "$LIVEKIT_KEY" > "$ETC/livekit_key"
 echo -n "$LIVEKIT_SECRET" > "$ETC/livekit_secret"
 chmod 600 "$ETC/livekit_key" "$ETC/livekit_secret"
