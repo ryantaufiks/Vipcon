@@ -61,6 +61,10 @@ class Device(Base):
     status = Column(String, default="provisioned")
     qr_version = Column(Integer, default=1)
     last_seen_at = Column(DateTime(timezone=True), nullable=True)
+    # Short name for the office network (see config.LAN_LABEL); DNS-safe, unique.
+    site_id = Column(String(40), unique=True, nullable=True)
+    # LAN IP currently published in DNS for site_id (avoids re-sending unchanged records).
+    dns_ip = Column(String(45), nullable=True)
     created_at = Column(DateTime(timezone=True), default=now)
 
     client = relationship("Client")

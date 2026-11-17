@@ -138,6 +138,7 @@ def load_state():
     return {
         "device_id": read(os.path.join(ETC, "device_id")),
         "root_domain": read(os.path.join(ETC, "root_domain")),
+        "site_fqdn": read(os.path.join(ETC, "site_fqdn")),
         "claim_code": read(os.path.join(ETC, "claim_code")),
         "claimed": claimed,
         "license_status": remote.get("license_status"),
@@ -156,6 +157,8 @@ def claim_link(st):
 
 
 def local_link(st):
+    if st.get("site_fqdn"):  # short office-network name with a trusted certificate
+        return f"https://{st['site_fqdn']}"
     return f"https://{st['device_id']}.local.{st['root_domain']}"
 
 

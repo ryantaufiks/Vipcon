@@ -17,14 +17,21 @@
       <dt>Last seen</dt><dd>{{ device.last_seen_at|dt }}</dd>
       <dt>QR version</dt><dd>v{{ device.qr_version }}</dd>
       <dt>Created</dt><dd>{{ device.created_at|dt }}</dd>
-      <dt>Internet link</dt><dd class="mono small">https://{{ device.device_id }}.{{ ROOT_DOMAIN }}</dd>
-      <dt>Local link</dt><dd class="mono small">https://{{ device.device_id }}.local.{{ ROOT_DOMAIN }}</dd>
+      <dt>Office link</dt><dd class="mono small">{% if site_fqdn %}<a href="https://{{ site_fqdn }}" rel="noreferrer">https://{{ site_fqdn }}</a>{% else %}<span class="muted">set a Site ID</span>{% endif %}</dd>
+      {% if site_fqdn %}
+      <dt>DNS</dt><dd class="small">{% if not dns_enabled %}<span class="warn">Cloudflare not configured</span>{% elif device.dns_ip %}{{ site_fqdn }} → <span class="mono">{{ device.dns_ip }}</span>{% else %}<span class="muted">waiting for the next heartbeat</span>{% endif %}</dd>
+      <dt>Certificate</dt><dd class="small">{% if tls %}Let's Encrypt, valid until {{ tls[3]|dt(False) }}{% elif not dns_enabled %}<span class="warn">Cloudflare not configured</span>{% else %}<span class="muted">being issued (a few minutes)</span>{% endif %}</dd>
+      {% endif %}
+      <dt>Fallback link</dt><dd class="mono small">https://{{ device.device_id }}.local.{{ ROOT_DOMAIN }}</dd>
     </dl>
   </div>
   <form method="post" action="/devices/{{ device.device_id }}" class="card">
     {{ csrf_field() }}
     <h2>Edit</h2>
     <label>Label <input name="label" value="{{ device.label or '' }}"></label>
+    <label>Site ID <span class="muted small">(office link: https://<b>site-id</b>.lan.{{ ROOT_DOMAIN }})</span>
+      <input name="site_id" value="{{ device.site_id or '' }}" maxlength="30" pattern="[a-z0-9][a-z0-9-]{1,28}[a-z0-9]" placeholder="e.g. securistate" autocomplete="off" spellcheck="false">
+    </label>
     <label>Client
       <select name="client_id"><option value="">— Inventory —</option>
         {% for c in clients %}<option value="{{ c.id }}" {{ 'selected' if c.id == device.client_id }}>{{ c.name }}</option>{% endfor %}

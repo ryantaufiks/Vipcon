@@ -81,6 +81,19 @@ def current_user(authorization: str = Header(None), db=Depends(get_db)):
     return user
 
 
+SITE_FILE = os.environ.get("SITE_FILE", "/etc/appliance/site_fqdn")
+
+
+def local_base():
+    """Office-network link: the short Site ID name if the control plane assigned one."""
+    try:
+        with open(SITE_FILE) as f:
+            fqdn = f.read().strip()
+    except OSError:
+        fqdn = ""
+    return f"https://{fqdn}" if fqdn else f"https://{DEVICE_ID}.local.{ROOT_DOMAIN}"
+
+
 def parse_dt(value):
     if not value:
         return None
@@ -102,7 +115,7 @@ def meeting_out(m):
         "max_participants": m.max_participants,
         "show_on_screen": m.show_on_screen is not False,
         "created_at": m.created_at.isoformat() if m.created_at else None,
-        "local_url": f"https://{DEVICE_ID}.local.{ROOT_DOMAIN}/m/{m.room_name}",
+        "local_url": f"{local_base()}/m/{m.room_name}",
         "internet_url": f"https://{DEVICE_ID}.{ROOT_DOMAIN}/m/{m.room_name}",
     }
 
