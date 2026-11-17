@@ -27,3 +27,4 @@ plan2.md.orig
 control-plane/.env
 *.pem
 .pytest_cache/
+control-plane/.env.bak*

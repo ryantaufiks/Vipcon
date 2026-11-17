@@ -1,0 +1,27 @@
+[Unit]
+Description=Vipcon LCD kiosk (3.5" touch screen)
+After=local-fs.target systemd-udevd.service
+# Keeps restarting forever: the screen must never fall back to a console.
+StartLimitIntervalSec=0
+
+[Service]
+ExecStart=/usr/bin/python3 /opt/appliance/kiosk/kiosk.py
+Restart=always
+RestartSec=2
+Nice=5
+MemoryMax=160M
+# Needs root only for /dev/fb*, /dev/input and the tty ioctl; everything else is locked down.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadOnlyPaths=/etc/appliance /opt/appliance
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+IPAddressDeny=any
+IPAddressAllow=localhost
+
+[Install]
+WantedBy=multi-user.target

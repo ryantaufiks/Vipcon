@@ -3,6 +3,7 @@ import PreJoin from './PreJoin.jsx'
 import Room from './Room.jsx'
 import Onboarding from './Onboarding.jsx'
 import Dashboard from './Dashboard.jsx'
+import Claim from './Claim.jsx'
 
 function useTheme() {
   const [theme, setTheme] = useState(() => localStorage.getItem('vipcon-theme') || 'dark')
@@ -25,6 +26,10 @@ export default function App() {
   const isHost = new URLSearchParams(window.location.search).get('host') === '1'
 
   const toggleTheme = () => setTheme((t) => (t === 'dark' ? 'light' : 'dark'))
+
+  if (window.location.pathname === '/claim') {
+    return <Claim theme={theme} onToggleTheme={toggleTheme} />
+  }
 
   if (window.location.pathname === '/admin') {
     return <Dashboard theme={theme} onToggleTheme={toggleTheme} />

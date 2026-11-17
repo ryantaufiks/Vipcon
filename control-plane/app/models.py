@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from sqlalchemy import JSON, Boolean, Column, Date, DateTime, Float, ForeignKey, Integer, String, Text
+from sqlalchemy import JSON, Boolean, Column, Date, DateTime, Float, ForeignKey, Integer, LargeBinary, String, Text
 from sqlalchemy.orm import declarative_base, relationship
 
 Base = declarative_base()
@@ -65,6 +65,19 @@ class Device(Base):
 
     client = relationship("Client")
     plan = relationship("Plan")
+
+
+class BrandingLogo(Base):
+    """Logo shown on the appliance LCD. client_id NULL is the global default."""
+
+    __tablename__ = "branding_logos"
+    id = Column(Integer, primary_key=True)
+    client_id = Column(Integer, ForeignKey("clients.id"), nullable=True, unique=True)
+    png = Column(LargeBinary, nullable=False)
+    sha256 = Column(String(64), nullable=False)
+    width = Column(Integer)
+    height = Column(Integer)
+    updated_at = Column(DateTime(timezone=True), default=now, onupdate=now)
 
 
 class Contract(Base):

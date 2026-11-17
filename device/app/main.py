@@ -1,5 +1,7 @@
 import os
+import re
 import secrets
+import threading
 import time
 from datetime import datetime, timedelta, timezone
 
@@ -96,11 +98,17 @@ def meeting_out(m):
 
 
 class ClaimRequest(BaseModel):
-    device_id: str
     claim_code: str
     username: str
     password: str
     display_name: str = ""
+    org_name: str = ""
+    device_id: str = ""  # ignored: the device's own id is used
+
+
+USERNAME_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{2,31}$")
+MIN_PASSWORD = 10
+_claim_lock = threading.Lock()
 
 
 class LoginRequest(BaseModel):
@@ -152,8 +160,9 @@ class SettingsRequest(BaseModel):
 
 
 @app.get("/healthz")
-def healthz():
-    return {"ok": True}
+def healthz(db=Depends(get_db)):
+    # "claimed" is read by the LCD kiosk to decide whether to offer the claim QR.
+    return {"ok": True, "claimed": db.query(User).first() is not None}
 
 
 @app.get("/api/v1/ca.pem")
@@ -197,32 +206,60 @@ def install_ca_bat():
     return serve_ca_file("install-ca.bat", "application/x-msdownload", "install-ca.bat")
 
 
+@app.get("/api/v1/claim/status")
+def claim_status(db=Depends(get_db)):
+    return {"claimed": db.query(User).first() is not None, "device_id": DEVICE_ID}
+
+
 @app.post("/api/v1/claim")
 def claim(req: ClaimRequest, db=Depends(get_db)):
-    if db.query(User).first() is not None:
-        raise HTTPException(409, "device already claimed")
-    if not CONTROL_PLANE_URL:
-        raise HTTPException(503, "control plane not configured")
-    try:
-        r = requests.post(
-            f"{CONTROL_PLANE_URL}/api/v1/claim/verify",
-            json={"device_id": req.device_id, "claim_code": req.claim_code},
-            timeout=10,
+    """First-run activation: verify the one-time claim code with the control plane, then
+    create the Client Admin. Reached from the QR on the device's LCD."""
+    username = req.username.strip().lower()
+    display_name = req.display_name.strip()[:80]
+    org_name = req.org_name.strip()[:100]
+    if not USERNAME_RE.match(username):
+        raise HTTPException(422, "Username 3-32 karakter: huruf kecil, angka, titik, minus atau garis bawah.")
+    if len(req.password) < MIN_PASSWORD:
+        raise HTTPException(422, f"Password minimal {MIN_PASSWORD} karakter.")
+    if req.password.lower() == username:
+        raise HTTPException(422, "Password tidak boleh sama dengan username.")
+    if not req.claim_code or len(req.claim_code) > 128:
+        raise HTTPException(400, "Kode aktivasi tidak valid.")
+    if not CONTROL_PLANE_URL or not DEVICE_ID:
+        raise HTTPException(503, "Device belum diprovisi.")
+    # One claim at a time; the control plane also only accepts the code once.
+    with _claim_lock:
+        if db.query(User).first() is not None:
+            raise HTTPException(409, "Device ini sudah diaktivasi. Silakan masuk.")
+        try:
+            r = requests.post(
+                f"{CONTROL_PLANE_URL}/api/v1/claim/verify",
+                json={"device_id": DEVICE_ID, "claim_code": req.claim_code},
+                timeout=10,
+            )
+        except requests.RequestException:
+            raise HTTPException(502, "Tidak bisa menghubungi server Vipcon. Periksa koneksi internet device.")
+        if r.status_code == 403:
+            raise HTTPException(403, "Device ini sedang ditangguhkan. Hubungi admin Vipcon.")
+        if r.status_code == 409:
+            raise HTTPException(409, "Kode aktivasi sudah pernah dipakai. Minta admin Vipcon membuat kode baru.")
+        if r.status_code != 200:
+            raise HTTPException(400, "Kode aktivasi tidak valid atau sudah dipakai.")
+        user = User(
+            username=username,
+            display_name=display_name or username,
+            password_hash=hash_password(req.password),
+            role="admin",
+            active=True,
         )
-    except requests.RequestException:
-        raise HTTPException(502, "control plane unreachable")
-    if r.status_code != 200:
-        raise HTTPException(400, "claim verification failed")
-    user = User(
-        username=req.username,
-        display_name=req.display_name,
-        password_hash=hash_password(req.password),
-        role="admin",
-        active=True,
-    )
-    db.add(user)
-    db.commit()
-    return {"ok": True, "token": create_session_token(user.id)}
+        db.add(user)
+        if org_name:
+            settings = db.query(OrgSettings).first() or OrgSettings()
+            settings.org_name = org_name
+            db.add(settings)
+        db.commit()
+    return {"ok": True, "token": create_session_token(user.id), "username": username}
 
 
 @app.post("/api/v1/login")

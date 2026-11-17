@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "_macros.html" import device_table with context %}
+{% from "_macros.html" import device_table, logo_form, logo_preview with context %}
 {% block content %}
 <div class="head"><h1>{{ client.name }}</h1><div><a class="button" href="/clients/{{ client.id }}/edit">Ubah</a> <a class="button primary" href="/contracts/new?client_id={{ client.id }}">+ Kontrak</a></div></div>
 <div class="card">
@@ -8,6 +8,13 @@
     <dt>Telepon</dt><dd>{{ client.contact_phone or '—' }}</dd>
     <dt>Catatan</dt><dd class="pre">{{ client.notes or '—' }}</dd>
   </dl>
+</div>
+<div class="card">
+  <h2>Logo layar device</h2>
+  {% if logo %}{{ logo_preview(logo) }}
+  {% elif global_logo %}<p class="muted">Memakai logo default. Unggah di sini untuk logo khusus client ini.</p>
+  {% else %}<p class="muted">Belum ada logo (default maupun khusus). Layar menampilkan tulisan VIPCON.</p>{% endif %}
+  {{ logo_form(logo, client.id) }}
 </div>
 <h2>Device</h2>
 {{ device_table(rows, show_client=False) }}

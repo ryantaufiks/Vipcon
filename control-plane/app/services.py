@@ -1,4 +1,5 @@
 import base64
+import hashlib
 import io
 import json
 import secrets
@@ -156,3 +157,76 @@ def issue_license(db, device):
     }
     db.add(LicenseToken(device_id=device.device_id, jti=jti, issued_at=issued, expires_at=expires, status=status))
     return sign_license(payload), payload
+
+
+# ---------------------------------------------------------------- branding
+
+LOGO_MAX_UPLOAD = 2 * 1024 * 1024
+LOGO_MAX_SIDE = 480  # the LCD is 480x320; anything bigger is wasted bytes on the device
+
+
+class LogoError(ValueError):
+    pass
+
+
+def normalize_logo(data):
+    """Validate an uploaded image and re-encode it as a bounded RGBA PNG.
+
+    Re-encoding drops metadata and anything that is not pixels, so the device
+    only ever receives a plain PNG produced here.
+    """
+    from PIL import Image, UnidentifiedImageError
+
+    if not data:
+        raise LogoError("File kosong.")
+    if len(data) > LOGO_MAX_UPLOAD:
+        raise LogoError("File terlalu besar (maks 2 MB).")
+    Image.MAX_IMAGE_PIXELS = 25_000_000
+    try:
+        with Image.open(io.BytesIO(data)) as probe:
+            if probe.format not in ("PNG", "JPEG", "WEBP"):
+                raise LogoError("Format harus PNG, JPG atau WEBP.")
+            probe.verify()
+        with Image.open(io.BytesIO(data)) as img:
+            img.load()
+            img = img.convert("RGBA")
+    except LogoError:
+        raise
+    except (UnidentifiedImageError, OSError, Image.DecompressionBombError, SyntaxError):
+        raise LogoError("File bukan gambar yang valid.")
+    bbox = img.getbbox()  # trim fully transparent borders
+    if bbox:
+        img = img.crop(bbox)
+    img.thumbnail((LOGO_MAX_SIDE, LOGO_MAX_SIDE), Image.LANCZOS)
+    out = io.BytesIO()
+    img.save(out, format="PNG", optimize=True)
+    return out.getvalue(), img.width, img.height
+
+
+def set_logo(db, client_id, data):
+    from models import BrandingLogo
+
+    png, width, height = normalize_logo(data)
+    logo = db.query(BrandingLogo).filter(BrandingLogo.client_id.is_(None) if client_id is None
+                                          else BrandingLogo.client_id == client_id).first()
+    if logo is None:
+        logo = BrandingLogo(client_id=client_id)
+        db.add(logo)
+    logo.png, logo.width, logo.height = png, width, height
+    logo.sha256 = hashlib.sha256(png).hexdigest()
+    logo.updated_at = now()
+    db.flush()
+    return logo
+
+
+def get_logo(db, client_id):
+    from models import BrandingLogo
+
+    q = db.query(BrandingLogo)
+    return (q.filter(BrandingLogo.client_id.is_(None)) if client_id is None
+            else q.filter(BrandingLogo.client_id == client_id)).first()
+
+
+def logo_for_device(db, device):
+    """The client's own logo wins; otherwise the global default; otherwise None."""
+    return (device.client_id and get_logo(db, device.client_id)) or get_logo(db, None)

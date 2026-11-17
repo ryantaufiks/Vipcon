@@ -4,13 +4,13 @@ import json
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import PlainTextResponse
+from fastapi.responses import PlainTextResponse, Response
 from pydantic import BaseModel
 
 from db import get_db
 from models import Device, Heartbeat, now
 from security import LICENSE_PUBLIC_PEM, decrypt_secret, sha256_hex, verify_device_signature
-from services import audit, issue_license, license_status
+from services import audit, issue_license, license_status, logo_for_device
 from web_common import client_ip
 
 router = APIRouter(prefix="/api/v1")
@@ -81,8 +81,24 @@ def heartbeat(request: Request, device=Depends(signed_device), db=Depends(get_db
     )
     device.last_seen_at = now()
     status, _ = license_status(db, device)
+    logo = logo_for_device(db, device)
     db.commit()
-    return {"ok": True, "license_status": status}
+    # Display state for the appliance LCD (see device/kiosk).
+    return {
+        "ok": True,
+        "license_status": status,
+        "claimed": device.claimed_at is not None,
+        "client_name": device.client.name if device.client else None,
+        "logo_sha256": logo.sha256 if logo else None,
+    }
+
+
+@router.get("/branding/logo")
+def branding_logo(device=Depends(signed_device), db=Depends(get_db)):
+    logo = logo_for_device(db, device)
+    if logo is None:
+        raise HTTPException(404, "no logo")
+    return Response(logo.png, media_type="image/png", headers={"X-Logo-SHA256": logo.sha256})
 
 
 @router.post("/license")

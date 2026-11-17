@@ -39,3 +39,28 @@
   </tbody>
 </table>
 {% endmacro %}
+
+{% macro logo_form(logo, client_id=None) %}
+<form method="post" action="/branding/logo" enctype="multipart/form-data" class="logo-form">
+  {{ csrf_field() }}
+  {% if client_id %}<input type="hidden" name="client_id" value="{{ client_id }}">{% endif %}
+  <label>{{ 'Ganti logo' if logo else 'Unggah logo' }}
+    <input type="file" name="logo" accept="image/png,image/jpeg,image/webp" required>
+  </label>
+  <button class="primary" name="action" value="upload">Simpan logo</button>
+</form>
+{% if logo %}
+<form method="post" action="/branding/logo" class="inline" data-confirm="Hapus logo ini?">
+  {{ csrf_field() }}
+  {% if client_id %}<input type="hidden" name="client_id" value="{{ client_id }}">{% endif %}
+  <button class="danger" name="action" value="delete">Hapus logo</button>
+</form>
+{% endif %}
+{% endmacro %}
+
+{% macro logo_preview(logo) %}
+{% if logo %}
+<div class="logo-preview"><img src="/branding/logo/{{ logo.id }}.png?v={{ logo.sha256[:12] }}" alt="Logo"></div>
+<p class="muted">{{ logo.width }}×{{ logo.height }} px · diperbarui {{ logo.updated_at|dt }}</p>
+{% endif %}
+{% endmacro %}

@@ -5,6 +5,7 @@ from collections import defaultdict, deque
 from datetime import date, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import Response
 from sqlalchemy import func
 
 from config import COOKIE_SECURE, SESSION_HOURS
@@ -13,6 +14,7 @@ from models import (
     CONNECTIVITY_MODES,
     CONTRACT_STATUSES,
     AuditLog,
+    BrandingLogo,
     Client,
     Contract,
     Device,
@@ -28,9 +30,13 @@ from services import (
     create_device,
     current_contract,
     is_online,
+    LOGO_MAX_UPLOAD,
+    LogoError,
+    get_logo,
     license_status,
     new_claim_code,
     provisioning_bundle,
+    set_logo,
 )
 from web_common import check_csrf, client_ip, current_admin, redirect, render
 
@@ -296,7 +302,15 @@ def client_detail(client_id: int, request: Request, admin=Depends(current_admin)
     client = get_or_404(db, Client, client_id)
     devices = db.query(Device).filter_by(client_id=client.id).order_by(Device.id).all()
     contracts = db.query(Contract).filter_by(client_id=client.id).order_by(Contract.end_date.desc()).all()
-    return render(request, "client_detail.html", client=client, rows=device_rows(db, devices), contracts=contracts)
+    return render(
+        request,
+        "client_detail.html",
+        client=client,
+        rows=device_rows(db, devices),
+        contracts=contracts,
+        logo=get_logo(db, client.id),
+        global_logo=get_logo(db, None),
+    )
 
 
 @router.get("/clients/{client_id}/edit")
@@ -331,6 +345,54 @@ async def client_update(client_id: int, request: Request, admin=Depends(current_
     audit(db, admin.email, "client.updated", client.id, client_ip(request), name=client.name)
     db.commit()
     return redirect(f"/clients/{client.id}", "Client disimpan.")
+
+
+# ---------------------------------------------------------------- branding
+
+
+@router.get("/branding")
+def branding(request: Request, admin=Depends(current_admin), db=Depends(get_db)):
+    custom = (
+        db.query(BrandingLogo, Client)
+        .join(Client, BrandingLogo.client_id == Client.id)
+        .order_by(Client.name)
+        .all()
+    )
+    return render(request, "branding.html", logo=get_logo(db, None), custom=custom)
+
+
+@router.get("/branding/logo/{logo_id}.png")
+def branding_logo_png(logo_id: int, admin=Depends(current_admin), db=Depends(get_db)):
+    logo = get_or_404(db, BrandingLogo, logo_id)
+    return Response(logo.png, media_type="image/png", headers={"Cache-Control": "private, no-store"})
+
+
+@router.post("/branding/logo")
+async def branding_logo_update(request: Request, admin=Depends(current_admin), db=Depends(get_db)):
+    form = await check_csrf(request)
+    client_id = optional_id(form, "client_id")
+    client = get_or_404(db, Client, client_id) if client_id else None
+    back = f"/clients/{client.id}" if client else "/branding"
+    target = f"client:{client.id}" if client else "global"
+    if form.get("action") == "delete":
+        logo = get_logo(db, client_id)
+        if logo:
+            db.delete(logo)
+            audit(db, admin.email, "branding.logo_removed", target, client_ip(request))
+            db.commit()
+        return redirect(back, "Logo dihapus.")
+    upload = form.get("logo")
+    if upload is None or not hasattr(upload, "read"):
+        return redirect(back, "Pilih file logo dulu.")
+    data = await upload.read(LOGO_MAX_UPLOAD + 1)
+    try:
+        logo = set_logo(db, client_id, data)
+    except LogoError as e:
+        return redirect(back, f"Logo ditolak: {e}")
+    audit(db, admin.email, "branding.logo_set", target, client_ip(request),
+          sha256=logo.sha256, width=logo.width, height=logo.height)
+    db.commit()
+    return redirect(back, "Logo disimpan. Device akan mengambilnya pada heartbeat berikutnya.")
 
 
 # ---------------------------------------------------------------- devices

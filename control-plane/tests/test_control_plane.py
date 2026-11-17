@@ -209,7 +209,9 @@ def test_bad_and_stale_signatures(client, admin):
 
 
 def test_every_form_carries_the_csrf_token(client, admin):
-    pages = ["/", "/account", "/plans/new", "/clients/new", "/devices/new", "/contracts/new", "/devices/dev_missing"]
+    pages = ["/", "/account", "/plans/new", "/clients/new", "/devices/new", "/contracts/new", "/devices/dev_missing",
+             "/branding"]
+    pages += [f"/clients/{c}" for c in set(re.findall(r'href="/clients/(\d+)"', client.get("/clients").text))]
     pages += [f"/devices/{d}" for d in set(re.findall(r'href="/devices/(dev_[0-9a-f]+)"', client.get("/devices").text))]
     for path in pages:
         html = client.get(path).text
@@ -223,3 +225,73 @@ def test_security_headers(client):
     r = client.get("/login")
     assert "frame-ancestors 'none'" in r.headers["content-security-policy"]
     assert r.headers["x-frame-options"] == "DENY"
+
+
+def png_bytes(color, size=(800, 200)):
+    import io
+
+    from PIL import Image
+
+    buf = io.BytesIO()
+    Image.new("RGBA", size, color).save(buf, format="PNG")
+    return buf.getvalue()
+
+
+def test_branding_logo_reaches_the_device(client, admin, tmp_path):
+    import hashlib
+
+    up = lambda files, **data: client.post(  # noqa: E731
+        "/branding/logo", data={"csrf": admin, "action": "upload", **data}, files=files, follow_redirects=False
+    )
+    # Not an image -> rejected, nothing stored.
+    assert up({"logo": ("x.png", b"<svg onload=alert(1)>", "image/png")}).status_code == 303
+    assert "Belum ada logo" in client.get("/branding").text
+    # CSRF still enforced on multipart.
+    r = client.post("/branding/logo", data={"action": "upload"}, files={"logo": ("a.png", png_bytes("red"), "image/png")})
+    assert r.status_code == 403
+
+    assert up({"logo": ("global.png", png_bytes((255, 0, 0, 255)), "image/png")}).status_code == 303
+    page = client.get("/branding").text
+    src = re.search(r'src="(/branding/logo/\d+\.png)', page).group(1)
+    img = client.get(src)
+    assert img.status_code == 200 and img.headers["content-type"] == "image/png"
+    global_sha = hashlib.sha256(img.content).hexdigest()
+
+    r = client.post("/clients", data={"csrf": admin, "name": "PT Logo"}, follow_redirects=False)
+    client_id = int(r.headers["location"].rsplit("/", 1)[1])
+    r = client.post("/devices", data={"csrf": admin, "client_id": str(client_id)})
+    payload = json.loads(unescape(re.search(r"<pre>(.*?)</pre>", r.text, re.S).group(1)))
+    agent = load_agent(payload["device_id"], payload["device_secret"])
+    agent.KIOSK_DIR = str(tmp_path)
+    agent.get = lambda path: client.get(path, headers=agent.sign("GET", path, b""))
+
+    hb = signed(client, agent, "/api/v1/heartbeat", {}).json()
+    assert hb["logo_sha256"] == global_sha and hb["client_name"] == "PT Logo" and hb["claimed"] is False
+    agent.update_kiosk(hb)
+    assert hashlib.sha256((tmp_path / "logo.png").read_bytes()).hexdigest() == global_sha
+    state = json.loads((tmp_path / "state.json").read_text())
+    assert state["client_name"] == "PT Logo" and state["claimed"] is False
+
+    # A client logo overrides the default, and is resized for the 480 px panel.
+    assert up({"logo": ("c.png", png_bytes((0, 0, 255, 255), (2000, 1000)), "image/png")},
+              client_id=str(client_id)).status_code == 303
+    hb = signed(client, agent, "/api/v1/heartbeat", {}).json()
+    assert hb["logo_sha256"] != global_sha
+    agent.update_kiosk(hb)
+    from PIL import Image
+
+    with Image.open(tmp_path / "logo.png") as im:
+        assert max(im.size) <= 480 and im.getpixel((0, 0))[:3] == (0, 0, 255)
+
+    # Logo endpoint is for signed devices only.
+    assert client.get("/api/v1/branding/logo").status_code == 401
+
+    # Removing both logos removes the file on the device.
+    client.post("/branding/logo", data={"csrf": admin, "action": "delete", "client_id": str(client_id)})
+    client.post("/branding/logo", data={"csrf": admin, "action": "delete"})
+    hb = signed(client, agent, "/api/v1/heartbeat", {}).json()
+    assert hb["logo_sha256"] is None
+    agent.update_kiosk(hb)
+    assert not (tmp_path / "logo.png").exists()
+    audit = client.get("/audit").text
+    assert "branding.logo_set" in audit and "branding.logo_removed" in audit

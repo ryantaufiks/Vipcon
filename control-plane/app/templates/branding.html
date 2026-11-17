@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% from "_macros.html" import logo_form, logo_preview with context %}
+{% block content %}
+<h1>Branding</h1>
+<div class="card narrow">
+  <h2>Logo default</h2>
+  <p class="muted">Tampil di screensaver layar LCD semua device. Client yang punya logo sendiri memakai logonya
+    masing-masing. Pakai PNG transparan, idealnya terang di atas latar gelap. Maks 2 MB, diperkecil otomatis ke 480 px.</p>
+  {% if logo %}{{ logo_preview(logo) }}{% else %}<p class="empty">Belum ada logo. Layar menampilkan tulisan VIPCON.</p>{% endif %}
+  {{ logo_form(logo) }}
+</div>
+<h2>Logo per client</h2>
+<table><thead><tr><th>Client</th><th>Logo</th><th>Diperbarui</th></tr></thead><tbody>
+{% for logo, client in custom %}
+  <tr><td><a href="/clients/{{ client.id }}">{{ client.name }}</a></td>
+      <td><img class="logo-thumb" src="/branding/logo/{{ logo.id }}.png?v={{ logo.sha256[:12] }}" alt=""></td>
+      <td>{{ logo.updated_at|dt }}</td></tr>
+{% else %}<tr><td colspan="3" class="empty">Belum ada. Atur dari halaman detail client.</td></tr>{% endfor %}
+</tbody></table>
+{% endblock %}

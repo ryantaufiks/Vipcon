@@ -99,3 +99,11 @@ export async function kickParticipant(token, meetingId, identity) {
 export async function muteParticipant(token, meetingId, identity, muted) {
   return api('POST', `/meetings/${meetingId}/moderate/mute`, { identity, muted }, token)
 }
+
+export async function claimStatus() {
+  return api('GET', '/claim/status')
+}
+
+export async function claimDevice(data) {
+  return api('POST', '/claim', data)
+}

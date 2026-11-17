@@ -34,6 +34,7 @@ LICENSE_INTERVAL = int(os.environ.get("LICENSE_INTERVAL", "21600"))
 APP_VERSION = os.environ.get("APP_VERSION", "0.1.0")
 LICENSE_FILE = os.environ.get("LICENSE_FILE", f"{ETC}/license.jwt")
 CERT_FILE = os.environ.get("CERT_FILE", f"{ETC}/ca/server.pem")
+KIOSK_DIR = os.environ.get("KIOSK_DIR", f"{ETC}/kiosk")
 
 
 def sign(method, path, body):
@@ -41,6 +42,10 @@ def sign(method, path, body):
     message = "\n".join([ts, method, path]).encode() + b"\n" + body
     signature = hmac.new(DEVICE_SECRET.encode(), message, hashlib.sha256).hexdigest()
     return {"X-Device-ID": DEVICE_ID, "X-Timestamp": ts, "X-Signature": signature}
+
+
+def get(path):
+    return requests.get(CONTROL_PLANE_URL + path, headers=sign("GET", path, b""), timeout=20)
 
 
 def post(path, payload):
@@ -116,6 +121,55 @@ def heartbeat():
         print("heartbeat", r.status_code, r.text[:200], flush=True)
     except requests.RequestException as e:
         print("heartbeat error", e, flush=True)
+        return
+    if r.status_code == 200:
+        update_kiosk(r.json())
+    elif r.status_code == 403:
+        update_kiosk({"license_status": "revoked", "claimed": True, "logo_sha256": None})
+
+
+def write_atomic(path, data, mode=0o644):
+    tmp = path + ".tmp"
+    with open(tmp, "wb") as f:
+        f.write(data)
+    os.chmod(tmp, mode)
+    os.replace(tmp, path)
+
+
+def file_sha256(path):
+    try:
+        with open(path, "rb") as f:
+            return hashlib.sha256(f.read()).hexdigest()
+    except OSError:
+        return None
+
+
+def update_kiosk(info):
+    """Keep the LCD kiosk's view of the control plane in /etc/appliance/kiosk.
+
+    The kiosk never talks to the network; it only reads these two files.
+    """
+    try:
+        os.makedirs(KIOSK_DIR, exist_ok=True)
+        logo_path = os.path.join(KIOSK_DIR, "logo.png")
+        want = info.get("logo_sha256")
+        if not want:
+            if os.path.exists(logo_path):
+                os.remove(logo_path)
+        elif file_sha256(logo_path) != want:
+            r = get("/api/v1/branding/logo")
+            if r.status_code == 200 and hashlib.sha256(r.content).hexdigest() == want:
+                write_atomic(logo_path, r.content)
+                print("logo updated", want[:12], flush=True)
+        state = {
+            "license_status": info.get("license_status"),
+            "claimed": bool(info.get("claimed")),
+            "client_name": info.get("client_name"),
+            "updated_at": int(time.time()),
+        }
+        write_atomic(os.path.join(KIOSK_DIR, "state.json"), json.dumps(state).encode())
+    except (OSError, ValueError, requests.RequestException) as e:
+        print("kiosk state error", e, flush=True)
 
 
 def refresh_license():
