@@ -65,6 +65,7 @@ if [ -f "$BOOT_JSON" ]; then
 else
     if [ -s "$ETC/device_id" ]; then
         echo "== refreshing $(cat "$ETC/device_id")"
+        chmod 600 "$ETC/device_secret" "$ETC/claim_code" 2>/dev/null || true   # older installs left these 644
         LAN_IP="${LAN_IP:-$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for (i = 1; i < NF; i++) if ($i == "src") print $(i + 1)}')}"
         "$OPT/templates/render-config.sh" "$(cat "$ETC/device_id")" "$(cat "$ETC/root_domain")" "$(hostname)" "$LAN_IP"
         (cd "$OPT" && docker compose up -d --force-recreate)
