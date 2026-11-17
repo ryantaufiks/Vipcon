@@ -1,10 +1,10 @@
 # Vipcon — Private, Self-Hosted Video Conference Appliance
 
 A **security-first** video conferencing device built for **confidential, mission-critical,
-and exclusive meetings** — negotiations, boardrooms, legal counsel, and any conversation
+and exclusive meetings**, negotiations, boardrooms, legal counsel, and any conversation
 where privacy is non-negotiable and data must never leave your network.
 
-Every layer — signaling, media, and meeting data — runs entirely on a single low-power
+Every layer, signaling, media, and meeting data runs entirely on a single low-power
 **edge SBC** inside your own infrastructure. No cloud, no third party, no data outside
 your control.
 
