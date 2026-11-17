@@ -18,7 +18,7 @@ def _credentials():
     return key, secret
 
 
-def _admin_token(room):
+def _admin_token(room, grants=None):
     key, secret = _credentials()
     now = int(time.time())
     payload = {
@@ -26,19 +26,24 @@ def _admin_token(room):
         "sub": "admin",
         "nbf": now,
         "exp": now + 300,
-        "video": {"roomJoin": True, "room": room, "roomAdmin": True},
+        "video": grants or {"roomJoin": True, "room": room, "roomAdmin": True},
     }
     return jwt.encode(payload, secret, algorithm="HS256")
 
 
-def _rpc(method, body, room):
-    token = _admin_token(room)
+def _rpc(method, body, room, grants=None):
+    token = _admin_token(room, grants)
     url = f"{LIVEKIT_HTTP}/twirp/livekit.RoomService/{method}"
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
     r = requests.post(url, json=body, headers=headers, timeout=10)
     if r.status_code != 200:
         raise Exception(f"{method} failed: {r.status_code} {r.text[:200]}")
     return r.json()
+
+
+def list_rooms():
+    """Rooms LiveKit currently has open, with their participant counts."""
+    return _rpc("ListRooms", {}, None, grants={"roomList": True}).get("rooms", [])
 
 
 def list_participants(room):

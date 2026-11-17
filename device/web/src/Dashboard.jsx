@@ -19,6 +19,7 @@ export default function Dashboard({ theme, onToggleTheme }) {
   const [mScheduled, setMScheduled] = useState('')
   const [mPasscode, setMPasscode] = useState('')
   const [mLobby, setMLobby] = useState(true)
+  const [mShow, setMShow] = useState(true)
   const [mDuration, setMDuration] = useState(60)
 
   const [uName, setUName] = useState('')
@@ -68,6 +69,7 @@ export default function Dashboard({ theme, onToggleTheme }) {
         scheduled_at: mScheduled ? new Date(mScheduled).toISOString() : null,
         passcode: mPasscode || null,
         lobby: mLobby,
+        show_on_screen: mShow,
         duration_minutes: mDuration,
       })
       setMTitle('')
@@ -175,6 +177,7 @@ export default function Dashboard({ theme, onToggleTheme }) {
             <input placeholder="Passcode (optional)" value={mPasscode} onChange={(e) => setMPasscode(e.target.value)} />
             <input type="number" min="5" max="240" value={mDuration} onChange={(e) => setMDuration(e.target.value)} title="Duration (minutes)" />
             <label className="dash-check"><input type="checkbox" checked={mLobby} onChange={(e) => setMLobby(e.target.checked)} /> Lobby</label>
+            <label className="dash-check" title="List this meeting on the room screen's 'Meetings in progress' page while it runs"><input type="checkbox" checked={mShow} onChange={(e) => setMShow(e.target.checked)} /> Show on room screen</label>
             <button className="btn btn-primary">Create</button>
           </form>
         </section>

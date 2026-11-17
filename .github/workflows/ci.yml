@@ -58,9 +58,14 @@ jobs:
         run: python -m py_compile device/agent/main.py device/app/*.py device/kiosk/kiosk.py
       - name: Shell scripts parse
         run: for f in device/kiosk/*.sh device/provisioning/*.sh; do bash -n "$f"; done
-      - name: Kiosk renders every screen
+      - name: Device app tests
         run: |
-          pip install pillow numpy qrcode
+          pip install -r device/app/requirements.txt pytest httpx
+          pytest -q device/app
+      - name: Kiosk screens render and their QR codes scan
+        run: |
+          pip install pillow numpy qrcode zxing-cpp pytest
+          pytest -q device/kiosk
           python device/kiosk/kiosk.py --preview "$RUNNER_TEMP/kiosk" --size 480x320
           python device/kiosk/kiosk.py --preview "$RUNNER_TEMP/kiosk" --size 320x480
           test "$(ls "$RUNNER_TEMP/kiosk" | wc -l)" -ge 10

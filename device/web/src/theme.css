@@ -470,3 +470,22 @@ input { font-family: inherit; }
   .ctl { padding: 11px 13px; }
   .grid { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); padding: 10px; }
 }
+
+/* Meetings in progress (/now) */
+.now-card { max-width: 520px; }
+.now-list { list-style: none; display: flex; flex-direction: column; gap: 8px; }
+.now-item {
+  display: flex; align-items: center; gap: 12px; padding: 12px 14px;
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  color: var(--text); text-decoration: none; background: var(--surface);
+}
+.now-item:hover { border-color: var(--border-2); background: var(--surface-2); }
+.now-main { flex: 1; display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.now-title { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.now-join { flex-shrink: 0; padding: 7px 14px; }
+.now-live {
+  width: 9px; height: 9px; border-radius: 50%; background: #e5484d; flex-shrink: 0;
+  box-shadow: 0 0 0 0 rgba(229, 72, 77, 0.6); animation: now-pulse 1.8s infinite;
+}
+@keyframes now-pulse { 70% { box-shadow: 0 0 0 7px rgba(229, 72, 77, 0); } 100% { box-shadow: 0 0 0 0 rgba(229, 72, 77, 0); } }
+.now-empty { text-align: center; padding: 18px 0 6px; color: var(--text-2); display: flex; flex-direction: column; gap: 4px; }
