@@ -13,12 +13,22 @@ if [ ! -f "$BOOT_JSON" ]; then
 fi
 
 python3 - "$BOOT_JSON" "$ETC" <<'PY'
-import json, sys
+import json, os, sys
 d = json.load(open(sys.argv[1]))
 etc = sys.argv[2]
+
+
+def write_private(path, value):
+    """Root-only from the moment it exists (the device secret signs every control-plane call)."""
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    os.fchmod(fd, 0o600)  # also tightens a file left over from an earlier install
+    with os.fdopen(fd, "w") as f:
+        f.write(value)
+
+
 open(f"{etc}/device_id", "w").write(d["device_id"])
-open(f"{etc}/device_secret", "w").write(d.get("device_secret", ""))
-open(f"{etc}/claim_code", "w").write(d.get("claim_code", ""))
+write_private(f"{etc}/device_secret", d.get("device_secret", ""))
+write_private(f"{etc}/claim_code", d.get("claim_code", ""))
 open(f"{etc}/connectivity_mode", "w").write(d.get("connectivity_mode", "standard"))
 open(f"{etc}/root_domain", "w").write(d.get("root_domain", ""))
 open(f"{etc}/control_plane_url", "w").write(d.get("control_plane_url", ""))
@@ -43,8 +53,10 @@ LIVEKIT_KEY="lk_$(openssl rand -hex 8)"
 LIVEKIT_SECRET=$(openssl rand -hex 32)
 SESSION_SECRET=$(openssl rand -hex 32)
 echo "$LAN_IP" > "$ETC/lan_ip"   # apply-lan-ip.sh compares against this
-echo -n "$LIVEKIT_KEY" > "$ETC/livekit_key"
-echo -n "$LIVEKIT_SECRET" > "$ETC/livekit_secret"
+# Secret files are created root-only (umask) rather than tightened after being written.
+(umask 077
+ echo -n "$LIVEKIT_KEY" > "$ETC/livekit_key"
+ echo -n "$LIVEKIT_SECRET" > "$ETC/livekit_secret")
 chmod 600 "$ETC/livekit_key" "$ETC/livekit_secret"
 
 sed -e "s/__LIVEKIT_KEY__/$LIVEKIT_KEY/g" \
@@ -57,6 +69,7 @@ sed -e "s/__LIVEKIT_KEY__/$LIVEKIT_KEY/g" \
 
 TPL="$TPL" ETC="$ETC" "$TPL/render-config.sh" "$DEVICE_ID" "$ROOT_DOMAIN" "$HOSTNAME" "$LAN_IP"
 
+umask 077   # app.env, agent.env and device.json below hold secrets
 cat > "$ETC/app.env" <<EOF
 LIVEKIT_URL=ws://127.0.0.1:7880
 LIVEKIT_API_KEY=$LIVEKIT_KEY
@@ -76,8 +89,7 @@ MODE=$MODE
 EOF
 chmod 600 "$ETC/app.env" "$ETC/agent.env"
 
-cp "$BOOT_JSON" "$ETC/device.json"
-chmod 600 "$ETC/device.json"
+install -m 600 "$BOOT_JSON" "$ETC/device.json"
 shred -u "$BOOT_JSON" 2>/dev/null || rm -f "$BOOT_JSON"
 
 systemctl enable appliance.service
