@@ -20,6 +20,9 @@ Built on [LiveKit](https://livekit.io) (a lightweight Go SFU) with a clean
 - **Air-gapped capable** — fully functional offline, with zero internet dependency.
 - **No third-party cloud** — nothing is routed through external infrastructure.
 - **Controlled access** — passcode, lobby, and host moderation decide exactly who joins.
+- **No recording, no media storage** — audio, video, and chat are relayed in real time
+  and never persisted. Only minimal meeting metadata (accounts, schedule, passcodes)
+  is kept locally on the device.
 
 ## Features
 
