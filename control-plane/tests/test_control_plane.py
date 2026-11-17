@@ -433,3 +433,23 @@ def test_site_id_dns_and_certificate(client, admin, monkeypatch):
     # Revoked devices drop off the list.
     client.post(f"/devices/{dev}/status", data={"csrf": admin, "action": "revoke", "confirm_id": dev})
     assert "acme.lan.example.test" not in open(os.environ["CERTS_WANTED"]).read()
+
+
+def test_public_site_and_console_are_separate(client):
+    site = {"host": "example.test"}
+    r = client.get("/", headers=site)
+    assert r.status_code == 200 and "Private Edge" in r.text and "Conferencing" in r.text
+    assert r.headers["cache-control"].startswith("public") and "frame-ancestors 'none'" in r.headers["content-security-policy"]
+    assert client.get("/", headers={"host": "www.example.test"}).status_code == 200
+    # Nothing of the console is reachable on the public site...
+    for path in ("/login", "/devices", "/branding", "/audit", "/account"):
+        assert client.get(path, headers=site, follow_redirects=False).status_code == 404, path
+    assert client.post("/login", headers=site, data={"email": EMAIL}).status_code == 404
+    # ...but devices still talk to the API there, and assets load.
+    assert client.get("/api/v1/license/pubkey", headers=site).text == LICENSE_PUBLIC_PEM
+    assert client.get("/static/site/site.css", headers=site).status_code == 200
+    assert "Allow: /" in client.get("/robots.txt", headers=site).text
+    # The console host is never indexed and still shows the console.
+    assert "Disallow: /" in client.get("/robots.txt").text
+    console = client.get("/", follow_redirects=False)
+    assert console.status_code in (200, 303) and "Private Edge" not in console.text
