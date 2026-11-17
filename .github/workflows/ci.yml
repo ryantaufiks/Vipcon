@@ -1,0 +1,83 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  control-plane:
+    name: Control plane tests (${{ matrix.db }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        db: [sqlite, postgres]
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: vipcon
+          POSTGRES_PASSWORD: vipcon
+          POSTGRES_DB: vipcon_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U vipcon" --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: control-plane/app/requirements.txt
+      - run: pip install -r control-plane/app/requirements.txt pytest httpx requests
+      - name: pytest
+        working-directory: control-plane
+        env:
+          TEST_DATABASE_URL: ${{ matrix.db == 'postgres' && 'postgresql+psycopg2://vipcon:vipcon@localhost:5432/vipcon_test' || '' }}
+        run: pytest -q tests
+
+  device:
+    name: Device code
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Python compiles
+        run: python -m py_compile device/agent/main.py device/app/*.py device/kiosk/kiosk.py
+      - name: Shell scripts parse
+        run: for f in device/kiosk/*.sh device/provisioning/*.sh; do bash -n "$f"; done
+      - name: Kiosk renders every screen
+        run: |
+          pip install pillow numpy qrcode
+          python device/kiosk/kiosk.py --preview "$RUNNER_TEMP/kiosk" --size 480x320
+          python device/kiosk/kiosk.py --preview "$RUNNER_TEMP/kiosk" --size 320x480
+          test "$(ls "$RUNNER_TEMP/kiosk" | wc -l)" -ge 10
+
+  web:
+    name: Device web build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: device/web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: device/web/package-lock.json
+      - run: npm ci
+      - run: npm run build
