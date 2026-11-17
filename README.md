@@ -1,13 +1,25 @@
-# Vipcon — Self-Hosted Video Conference Appliance
+# Vipcon — Private, Self-Hosted Video Conference Appliance
 
-A private, **local-first** video conferencing device that runs entirely on a single
-low-power **edge SBC** (single-board computer). No cloud dependency, no per-seat
-subscription — your meetings stay on your own network.
+A **security-first** video conferencing device built for **confidential, mission-critical,
+and exclusive meetings** — negotiations, boardrooms, legal counsel, and any conversation
+where privacy is non-negotiable and data must never leave your network.
+
+Every layer — signaling, media, and meeting data — runs entirely on a single low-power
+**edge SBC** inside your own infrastructure. No cloud, no third party, no data outside
+your control.
 
 Built on [LiveKit](https://livekit.io) (a lightweight Go SFU) with a clean
 **black & white "urban" UI** supporting dark and light themes.
 
 ---
+
+## Why Vipcon
+
+- **Private by design** — signaling, media, and meeting data never leave your network;
+  you own the hardware end-to-end.
+- **Air-gapped capable** — fully functional offline, with zero internet dependency.
+- **No third-party cloud** — nothing is routed through external infrastructure.
+- **Controlled access** — passcode, lobby, and host moderation decide exactly who joins.
 
 ## Features
 
