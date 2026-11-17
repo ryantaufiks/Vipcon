@@ -36,5 +36,10 @@ CF_ZONE_ID = env("CF_ZONE_ID")
 CERTS_WANTED = env("CERTS_WANTED", "/data/certs/wanted.txt")
 TLS_DIR = env("TLS_DIR", "/tls")
 
+# Public product site. On these hosts only the landing page, /api/* (devices) and /static are
+# served; the superadmin console answers on any other host (e.g. console.<ROOT_DOMAIN>).
+SITE_HOSTS = {h.strip().lower() for h in env("SITE_HOSTS", f"{ROOT_DOMAIN},www.{ROOT_DOMAIN}").split(",") if h.strip()}
+SITE_CONTACT_EMAIL = env("SITE_CONTACT_EMAIL", "")
+
 if not SECRET_KEY:
     raise RuntimeError("SECRET_KEY is required (generate one with: openssl rand -hex 32)")

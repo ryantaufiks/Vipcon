@@ -6,10 +6,10 @@ from datetime import timedelta
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import HTTPException
-from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.responses import JSONResponse, PlainTextResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
-from config import HEARTBEAT_RETENTION_DAYS
+from config import HEARTBEAT_RETENTION_DAYS, SITE_CONTACT_EMAIL, SITE_HOSTS
 from sqlalchemy import inspect, text
 
 from db import SessionLocal, engine
@@ -17,7 +17,7 @@ from models import Base, Heartbeat, now
 import admin
 import device_api
 from services import sync_cert_wanted
-from web_common import LoginRequired, render
+from web_common import LoginRequired, render, templates
 
 log = logging.getLogger("control-plane")
 
@@ -73,6 +73,34 @@ app.mount("/static", StaticFiles(directory=os.path.join(os.path.dirname(__file__
 app.include_router(device_api.router)
 app.include_router(admin.router)
 
+SITE_PATHS = ("/api/", "/static/")
+
+
+def site_page(request, name, status_code=200):
+    return templates.TemplateResponse(request, f"site/{name}", {"contact_email": SITE_CONTACT_EMAIL},
+                                      status_code=status_code)
+
+
+@app.middleware("http")
+async def split_hosts(request: Request, call_next):
+    """The product site and the superadmin console share this app but never each other's pages."""
+    host = (request.headers.get("host") or "").split(":")[0].lower()
+    path = request.url.path
+    if host in SITE_HOSTS:
+        if path.startswith(SITE_PATHS) or path == "/healthz":
+            return await call_next(request)
+        if path == "/" and request.method in ("GET", "HEAD"):
+            response = site_page(request, "landing.html")
+            response.headers["Cache-Control"] = "public, max-age=300"
+            return response
+        if path == "/robots.txt":
+            return PlainTextResponse("User-agent: *\nAllow: /\nDisallow: /api/\n")
+        return site_page(request, "not_found.html", 404)
+    if path == "/robots.txt":  # the console is never indexed
+        return PlainTextResponse("User-agent: *\nDisallow: /\n")
+    return await call_next(request)
+
+
 CSP = (
     "default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; "
     "form-action 'self'; frame-ancestors 'none'; base-uri 'none'"
@@ -86,7 +114,7 @@ async def security_headers(request: Request, call_next):
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["Referrer-Policy"] = "no-referrer"
-    if not request.url.path.startswith("/static/"):
+    if not request.url.path.startswith("/static/") and "cache-control" not in response.headers:
         response.headers["Cache-Control"] = "no-store"
     return response
 

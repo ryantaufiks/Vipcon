@@ -1,0 +1,149 @@
+{% extends "site/_layout.html" %}
+{% set cta = 'mailto:' ~ contact_email ~ '?subject=VIPCON%20demo%20request' if contact_email else '#contact' %}
+{% block body %}
+<header class="nav">
+  <a class="brand" href="/" aria-label="VIPCON home"><span class="mark" aria-hidden="true"></span><span>VIP<b>CON</b></span></a>
+  <nav aria-label="Main">
+    <a href="#features">Features</a>
+    <a href="#how">How it works</a>
+    <a href="#privacy">Privacy</a>
+    <a href="#use-cases">Use cases</a>
+  </nav>
+  <a class="btn btn-sm" href="{{ cta }}">Request a demo</a>
+</header>
+
+<main>
+  <section class="hero">
+    <div class="hero-copy">
+      <p class="eyebrow">Bastion Series</p>
+      <h1>Private Edge <span>Conferencing</span></h1>
+      <p class="lede">Secure. Local. Fully in your control.</p>
+      <hr class="rule">
+      <p class="intro">A video-conferencing appliance that lives in your meeting room. Calls, screens and chat run
+        on the device itself, never through someone else's cloud, and keep running even when the internet doesn't.</p>
+      <div class="actions">
+        <a class="btn" href="{{ cta }}">Request a demo</a>
+        <a class="btn btn-ghost" href="#how">See how it works</a>
+      </div>
+    </div>
+    <figure class="hero-media">
+      <picture>
+        <source type="image/webp" srcset="/static/site/hero-device-700.webp 700w, /static/site/hero-device-1200.webp 1200w" sizes="(min-width: 760px) 55vw, 100vw">
+        <img src="/static/site/hero-device-1200.jpg" srcset="/static/site/hero-device-700.jpg 700w, /static/site/hero-device-1200.jpg 1200w"
+             sizes="(min-width: 760px) 55vw, 100vw" width="1200" height="1165"
+             alt="The VIPCON appliance on a boardroom table, its touch screen showing a red fingerprint and 'Touch the screen to begin'">
+      </picture>
+    </figure>
+  </section>
+
+  <section id="features" class="pillars" aria-label="Highlights">
+    <article>
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l7 3v5c0 4.4-3 8.4-7 10-4-1.6-7-5.6-7-10V6l7-3z"/><rect x="9" y="11" width="6" height="5" rx="1"/><path d="M10 11V9.5a2 2 0 014 0V11"/></svg>
+      <h2>Privacy first</h2>
+      <p>Video, audio, chat and participant names stay on your network. Our management service only sees device health, never meeting content.</p>
+    </article>
+    <article>
+      <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="16" height="5" rx="1"/><rect x="4" y="10" width="16" height="5" rx="1"/><rect x="4" y="16" width="16" height="4" rx="1"/><path d="M7 6.5h.01M7 12.5h.01M7 18h.01"/></svg>
+      <h2>On-premise &amp; offline ready</h2>
+      <p>The meeting server runs on the appliance. If your internet connection drops, meetings on the office network carry on.</p>
+    </article>
+    <article>
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M13 2L4 14h7l-1 8 9-12h-7l1-8z"/></svg>
+      <h2>Low latency &amp; reliable</h2>
+      <p>Media goes straight across your LAN to the device in the room, with no detour through a distant data centre.</p>
+    </article>
+    <article>
+      <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3"/><circle cx="17" cy="9" r="2.5"/><path d="M3 20c0-3.3 2.7-6 6-6s6 2.7 6 6M14.5 14.5c.8-.3 1.6-.5 2.5-.5 2.8 0 5 2.2 5 5"/></svg>
+      <h2>Built for critical meetings</h2>
+      <p>Passcodes, a host-approved lobby, and a locked-down device that runs nothing but your meetings.</p>
+    </article>
+  </section>
+
+  <section id="how" class="steps">
+    <p class="eyebrow">How it works</p>
+    <h2 class="section-title">From the box to your first meeting in minutes</h2>
+    <ol>
+      <li>
+        <span class="num">01</span>
+        <h3>Place it in the room</h3>
+        <p>Power it on and the touch screen shows your brand within seconds. Plug in Ethernet, or connect Wi-Fi from
+          your phone by scanning the code on the screen.</p>
+      </li>
+      <li>
+        <span class="num">02</span>
+        <h3>Activate with a scan</h3>
+        <p>Scan the activation code and create your administrator account. There's no software to install and no
+          server to set up.</p>
+      </li>
+      <li>
+        <span class="num">03</span>
+        <h3>Meet</h3>
+        <p>Create meetings and share links. People in the room scan the screen to see the meetings in progress and
+          join from their browser on a laptop, tablet or phone.</p>
+      </li>
+    </ol>
+  </section>
+
+  <section id="privacy" class="privacy">
+    <div>
+      <p class="eyebrow">Privacy by design</p>
+      <h2 class="section-title">What happens in the room stays in the room</h2>
+      <p class="intro">VIPCON is managed centrally but never routes your meetings through the cloud. Here is exactly
+        what stays on the device, and the little that doesn't.</p>
+    </div>
+    <div class="ledger">
+      <div class="col stays">
+        <h3>Stays on the device</h3>
+        <ul>
+          <li>Video, audio and screen sharing</li>
+          <li>Chat messages</li>
+          <li>Meeting titles and participant names</li>
+          <li>User accounts and passwords</li>
+        </ul>
+      </div>
+      <div class="col leaves">
+        <h3>Sent to the management service</h3>
+        <ul>
+          <li>Device health: temperature, storage, uptime, software version</li>
+          <li>Licence status</li>
+          <li>The device's local network address, to publish your private office link</li>
+        </ul>
+      </div>
+    </div>
+    <ul class="assurances">
+      <li><b>Trusted HTTPS on your network.</b> A short office link with a real certificate, so there's no warning
+        to click through and nothing to install on phones.</li>
+      <li><b>Signed end to end.</b> Every request a device makes is signed, and licences are cryptographically
+        signed too.</li>
+      <li><b>Nothing to install.</b> Participants join from any modern browser.</li>
+    </ul>
+  </section>
+
+  <section id="use-cases" class="uses">
+    <p class="eyebrow">Built for</p>
+    <h2 class="section-title">Rooms where the conversation matters</h2>
+    <div class="grid">
+      <div><h3>Boardrooms</h3><p>Board and executive meetings that shouldn't sit on a third-party server.</p></div>
+      <div><h3>Government &amp; defence</h3><p>Briefings that stay inside the building, online or air-gapped.</p></div>
+      <div><h3>Legal &amp; finance</h3><p>Privileged and price-sensitive discussions under your own control.</p></div>
+      <div><h3>Healthcare</h3><p>Case reviews where patient details must not leave the premises.</p></div>
+    </div>
+  </section>
+
+  <section id="contact" class="cta">
+    <h2>See it in your own meeting room</h2>
+    <p>We'll bring a Bastion Series unit and run a live meeting on your network.</p>
+    {% if contact_email %}
+    <a class="btn" href="{{ cta }}">Request a demo</a>
+    <p class="small">or email <a href="mailto:{{ contact_email }}">{{ contact_email }}</a></p>
+    {% else %}
+    <p class="small">Contact your VIPCON partner to arrange a demo.</p>
+    {% endif %}
+  </section>
+</main>
+
+<footer class="foot">
+  <span>VIP<b>CON</b> · Private Edge Conferencing</span>
+  <span>© VIPCON</span>
+</footer>
+{% endblock %}
