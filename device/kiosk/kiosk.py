@@ -46,7 +46,7 @@ FULL_REPAINT = 3  # seconds
 BG = (6, 8, 12)
 FG = (236, 240, 245)
 MUTED = (128, 138, 152)
-ACCENT = (94, 214, 196)  # calm teal
+ACCENT = (255, 0, 0)  # brand red, same as the client logo
 WARN = (240, 176, 64)
 
 INACTIVE = ("suspended", "revoked", "expired", "no_contract")
@@ -103,6 +103,7 @@ def load_state():
         "claimed": claimed,
         "license_status": remote.get("license_status"),
         "client_name": remote.get("client_name"),
+        "tagline": (remote.get("tagline") or "").strip()[:40],
         "lan_ip": lan_ip(),
         "logo_path": logo_path,
         "logo_mtime": logo_mtime,
@@ -177,6 +178,18 @@ def wrap_chars(draw, text, f, max_width):
     return lines
 
 
+def spaced_text(draw, cx, y, text, f, fill, tracking, max_width):
+    """Centred text with letter spacing (falls back to no spacing if it would not fit)."""
+    widths = [draw.textlength(ch, font=f) for ch in text]
+    total = sum(widths) + tracking * (len(text) - 1)
+    if total > max_width:
+        tracking, total = 0, sum(widths)
+    x = cx - total / 2
+    for ch, cw in zip(text, widths):
+        draw.text((x, y), ch, font=f, fill=fill)
+        x += cw + tracking
+
+
 def text_center(draw, cx, y, text, f, fill):
     w = draw.textlength(text, font=f)
     draw.text((cx - w / 2, y), text, font=f, fill=fill)
@@ -233,7 +246,18 @@ def load_logo(path, max_w, max_h):
     if logo is None:
         logo = default_wordmark(max_w)
     logo.thumbnail((max_w, max_h), Image.LANCZOS)
-    return logo
+    return for_dark_background(logo)
+
+
+def for_dark_background(logo):
+    """Logos made for white pages often have black text, which vanishes on this black
+    screen. Turn near-black opaque pixels into the foreground colour; keep everything else."""
+    a = np.asarray(logo, dtype=np.uint8).copy()
+    rgb = a[..., :3].astype(np.int32)
+    luma = (rgb[..., 0] * 299 + rgb[..., 1] * 587 + rgb[..., 2] * 114) // 1000
+    dark = (luma < 60) & (a[..., 3] > 0)
+    a[dark, 0], a[dark, 1], a[dark, 2] = FG
+    return Image.fromarray(a, "RGBA")
 
 
 def qr_image(text, size):
@@ -256,7 +280,7 @@ class Renderer:
         self.cache = {}
 
     def set_state(self, st):
-        key = (st["logo_path"], st["logo_mtime"], st["license_status"], st["claimed"])
+        key = (st["logo_path"], st["logo_mtime"], st["license_status"], st["claimed"], st.get("tagline"))
         if self.state is None or key != self.cache.get("key"):
             self.cache = {"key": key}
         self.state = st
@@ -266,20 +290,28 @@ class Renderer:
     def _saver_layout(self):
         if "saver" not in self.cache:
             w, h = self.w, self.h
-            fp_size = int(min(w, h) * (0.42 if self.landscape else 0.46))
+            u = min(w, h)
+            fp_size = int(u * (0.34 if self.landscape else 0.38))
             logo = load_logo(self.state["logo_path"], int(w * 0.62), int(h * (0.22 if self.landscape else 0.18)))
-            gap = int(h * 0.05)
-            hint_h = int(min(w, h) * 0.09)
-            total = logo.height + gap + fp_size + gap + hint_h
+            tagline = self.state.get("tagline") or ""
+            tag_font = font(max(10, int(u * 0.045)))
+            tag_gap = int(u * 0.03)
+            tag_h = tag_gap + tag_font.size if tagline else 0
+            gap = int(h * 0.06)
+            hint_h = int(u * 0.09)
+            total = logo.height + tag_h + gap + fp_size + gap + hint_h
             top = max(6, (h - total) // 2)
             base = Image.new("RGB", (w, h), BG)
             base.paste(logo, ((w - logo.width) // 2, top), logo)
-            fp_y = top + logo.height + gap
+            if tagline:
+                spaced_text(ImageDraw.Draw(base), w / 2, top + logo.height + tag_gap, tagline.upper(),
+                            tag_font, mix(FG, 0.75), tracking=max(1, int(u * 0.008)), max_width=w * 0.9)
+            fp_y = top + logo.height + tag_h + gap
             hint_y = fp_y + fp_size + gap
             inactive = self.state["claimed"] and self.state["license_status"] in INACTIVE
             color = WARN if inactive else ACCENT
             d = ImageDraw.Draw(base)
-            hint = "Layanan tidak aktif" if inactive else "Sentuh layar untuk mulai"
+            hint = "Service inactive" if inactive else "Touch the screen to begin"
             text_center(d, w / 2, hint_y, hint, font(int(min(w, h) * 0.05)), mix(MUTED, 0.9))
             self.cache["saver"] = (base, fingerprint(fp_size, color), color, ((w - fp_size) // 2, fp_y), fp_size)
         return self.cache["saver"]
@@ -349,34 +381,34 @@ class Renderer:
 
     def detail(self, remaining):
         st = self.state
-        foot = f"Ketuk untuk kembali · {remaining} dtk"
+        foot = f"Tap to go back · {remaining}s"
         if not st["device_id"] or not st["root_domain"]:
-            return self._panel("Device belum siap", [("Device ini belum diprovisi. Hubungi admin Vipcon.", MUTED, False)], foot=foot)
+            return self._panel("Device not ready", [("This device has not been provisioned yet. Please contact your Vipcon administrator.", MUTED, False)], foot=foot)
         if st["claimed"] and st["license_status"] in INACTIVE:
             return self._panel(
-                "Layanan tidak aktif",
-                [("Lisensi device ini sedang tidak aktif. Meeting baru tidak bisa dimulai.", FG, False),
-                 ("Hubungi administrator Vipcon.", MUTED, False),
+                "Service inactive",
+                [("This device's licence is inactive. New meetings cannot be started.", FG, False),
+                 ("Please contact your Vipcon administrator.", MUTED, False),
                  (st["device_id"], MUTED, True)],
                 foot=foot, title_color=WARN,
             )
         if not st["claimed"]:
             if not st["claim_code"]:
-                return self._panel("Kode aktivasi tidak ada", [("Minta admin Vipcon membuat ulang kode aktivasi.", MUTED, False)], foot=foot)
+                return self._panel("No activation code", [("Ask your Vipcon administrator to issue a new activation code.", MUTED, False)], foot=foot)
             return self._panel(
-                "Aktivasi Vipcon",
-                [("Scan dengan HP untuk mendaftarkan Client Admin.", FG, False),
+                "Activate Vipcon",
+                [("Scan with your phone to register the Client Admin.", FG, False),
                  (st["device_id"], MUTED, True)],
                 qr_text=claim_link(st), foot=foot,
             )
         lines = []
         if st["client_name"]:
             lines.append((st["client_name"], ACCENT, False))
-        lines.append(("Scan untuk membuka Vipcon di jaringan ini.", FG, False))
+        lines.append(("Scan to open Vipcon on this network.", FG, False))
         lines.append((f"{st['device_id']}.local.{st['root_domain']}", MUTED, True))
         if st["lan_ip"]:
             lines.append((f"https://{st['lan_ip']}", MUTED, True))
-        return self._panel("Vipcon siap", lines, qr_text=local_link(st), foot=foot)
+        return self._panel("Vipcon is ready", lines, qr_text=local_link(st), foot=foot)
 
 
 # ---------------------------------------------------------------- hardware
@@ -542,11 +574,12 @@ def preview(out_dir, width, height):
     base = {
         "device_id": "dev_3f9a1c2b7d4e", "root_domain": "xrostr.com", "claim_code": "Zk3f-example-claim-code",
         "claimed": False, "license_status": None, "client_name": None, "lan_ip": "192.168.1.23",
+        "tagline": os.environ.get("KIOSK_PREVIEW_TAGLINE", ""),
         "logo_path": os.environ.get("KIOSK_PREVIEW_LOGO"), "logo_mtime": 0,
     }
     cases = {
         "saver": {}, "unclaimed": {},
-        "claimed": {"claimed": True, "license_status": "active", "client_name": "PT Contoh Sejahtera Abadi"},
+        "claimed": {"claimed": True, "license_status": "active", "client_name": "Example Holdings Pte Ltd"},
         "inactive": {"claimed": True, "license_status": "expired"},
     }
     for name, extra in cases.items():

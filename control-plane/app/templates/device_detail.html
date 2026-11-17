@@ -12,99 +12,99 @@
       <dt>Client</dt><dd>{% if device.client %}<a href="/clients/{{ device.client.id }}">{{ device.client.name }}</a>{% else %}—{% endif %}</dd>
       <dt>Plan</dt><dd>{{ device.plan.name if device.plan else '—' }}</dd>
       <dt>Mode</dt><dd>{{ device.connectivity_mode }}</dd>
-      <dt>Kontrak berjalan</dt><dd>{% if contract %}<a href="/contracts/{{ contract.id }}">{{ contract.start_date }} → {{ contract.end_date }}</a>{% else %}—{% endif %}</dd>
-      <dt>Diklaim</dt><dd>{{ device.claimed_at|dt }}</dd>
-      <dt>Terakhir terlihat</dt><dd>{{ device.last_seen_at|dt }}</dd>
-      <dt>Versi QR</dt><dd>v{{ device.qr_version }}</dd>
-      <dt>Dibuat</dt><dd>{{ device.created_at|dt }}</dd>
-      <dt>Link internet</dt><dd class="mono small">https://{{ device.device_id }}.{{ ROOT_DOMAIN }}</dd>
-      <dt>Link lokal</dt><dd class="mono small">https://{{ device.device_id }}.local.{{ ROOT_DOMAIN }}</dd>
+      <dt>Current contract</dt><dd>{% if contract %}<a href="/contracts/{{ contract.id }}">{{ contract.start_date }} → {{ contract.end_date }}</a>{% else %}—{% endif %}</dd>
+      <dt>Claimed</dt><dd>{{ device.claimed_at|dt }}</dd>
+      <dt>Last seen</dt><dd>{{ device.last_seen_at|dt }}</dd>
+      <dt>QR version</dt><dd>v{{ device.qr_version }}</dd>
+      <dt>Created</dt><dd>{{ device.created_at|dt }}</dd>
+      <dt>Internet link</dt><dd class="mono small">https://{{ device.device_id }}.{{ ROOT_DOMAIN }}</dd>
+      <dt>Local link</dt><dd class="mono small">https://{{ device.device_id }}.local.{{ ROOT_DOMAIN }}</dd>
     </dl>
   </div>
   <form method="post" action="/devices/{{ device.device_id }}" class="card">
     {{ csrf_field() }}
-    <h2>Ubah</h2>
+    <h2>Edit</h2>
     <label>Label <input name="label" value="{{ device.label or '' }}"></label>
     <label>Client
-      <select name="client_id"><option value="">— Inventaris —</option>
+      <select name="client_id"><option value="">— Inventory —</option>
         {% for c in clients %}<option value="{{ c.id }}" {{ 'selected' if c.id == device.client_id }}>{{ c.name }}</option>{% endfor %}
       </select>
     </label>
     <label>Plan
-      <select name="plan_id"><option value="">— Belum ditentukan —</option>
+      <select name="plan_id"><option value="">— Not set —</option>
         {% for p in plans %}<option value="{{ p.id }}" {{ 'selected' if p.id == device.plan_id }}>{{ p.name }}</option>{% endfor %}
       </select>
     </label>
-    <label>Mode konektivitas
+    <label>Connectivity mode
       <select name="connectivity_mode">{% for m in modes %}<option {{ 'selected' if m == device.connectivity_mode }}>{{ m }}</option>{% endfor %}</select>
     </label>
-    <button class="primary">Simpan</button>
+    <button class="primary">Save</button>
   </form>
 </div>
 
 <div class="card">
-  <h2>Aksi</h2>
+  <h2>Actions</h2>
   <div class="actions">
     {% if device.status in ('provisioned', 'claimed') %}
-    <form method="post" action="/devices/{{ device.device_id }}/status" data-confirm="Tangguhkan device ini? Device akan menolak meeting baru setelah lisensinya diperbarui.">
-      {{ csrf_field() }}<input type="hidden" name="action" value="suspend"><button>Tangguhkan</button>
+    <form method="post" action="/devices/{{ device.device_id }}/status" data-confirm="Suspend this device? It will refuse new meetings once its licence refreshes.">
+      {{ csrf_field() }}<input type="hidden" name="action" value="suspend"><button>Suspend</button>
     </form>
     {% endif %}
     {% if device.status == 'suspended' %}
     <form method="post" action="/devices/{{ device.device_id }}/status">
-      {{ csrf_field() }}<input type="hidden" name="action" value="reactivate"><button class="primary">Aktifkan kembali</button>
+      {{ csrf_field() }}<input type="hidden" name="action" value="reactivate"><button class="primary">Reactivate</button>
     </form>
     {% endif %}
     {% if device.status != 'revoked' %}
-    <form method="post" action="/devices/{{ device.device_id }}/regenerate-claim" data-confirm="Buat claim code dan QR baru? QR lama langsung tidak berlaku.">
+    <form method="post" action="/devices/{{ device.device_id }}/regenerate-claim" data-confirm="Create a new claim code and QR code? The old QR code stops working immediately.">
       {{ csrf_field() }}<button>Regenerate QR</button>
     </form>
-    <a class="button" href="/contracts/new?device_id={{ device.id }}{% if device.client_id %}&client_id={{ device.client_id }}{% endif %}">+ Kontrak</a>
+    <a class="button" href="/contracts/new?device_id={{ device.id }}{% if device.client_id %}&client_id={{ device.client_id }}{% endif %}">+ Contract</a>
     {% endif %}
   </div>
   {% if device.status != 'revoked' %}
   <details class="danger">
-    <summary>Cabut device (permanen)</summary>
+    <summary>Revoke device (permanent)</summary>
     <form method="post" action="/devices/{{ device.device_id }}/status">
       {{ csrf_field() }}<input type="hidden" name="action" value="revoke">
-      <p>Device yang dicabut tidak bisa mengirim heartbeat, mengambil lisensi, atau diklaim lagi. Tidak bisa dibatalkan.</p>
-      <label>Ketik <code>{{ device.device_id }}</code> untuk konfirmasi <input name="confirm_id" autocomplete="off" required></label>
-      <button class="danger">Cabut device</button>
+      <p>A revoked device can no longer send heartbeats, fetch a licence or be claimed. This cannot be undone.</p>
+      <label>Type <code>{{ device.device_id }}</code> to confirm <input name="confirm_id" autocomplete="off" required></label>
+      <button class="danger">Revoke device</button>
     </form>
   </details>
   {% endif %}
 </div>
 
 <div class="card">
-  <h2>Kontrak</h2>
-  <table><thead><tr><th>Periode</th><th>Plan</th><th>Status</th><th>Harga</th></tr></thead><tbody>
-  {% for c in contracts %}<tr><td><a href="/contracts/{{ c.id }}">{{ c.start_date }} → {{ c.end_date }}</a></td><td>{{ c.plan.name }}</td><td>{{ c.status }}</td><td>Rp {{ c.price_agreed|money }}</td></tr>
-  {% else %}<tr><td colspan="4" class="empty">Belum ada kontrak. Device tanpa kontrak aktif tidak mendapat lisensi aktif.</td></tr>{% endfor %}
+  <h2>Contracts</h2>
+  <table><thead><tr><th>Period</th><th>Plan</th><th>Status</th><th>Price</th></tr></thead><tbody>
+  {% for c in contracts %}<tr><td><a href="/contracts/{{ c.id }}">{{ c.start_date }} → {{ c.end_date }}</a></td><td>{{ c.plan.name }}</td><td>{{ c.status }}</td><td>{{ CURRENCY }} {{ c.price_agreed|money }}</td></tr>
+  {% else %}<tr><td colspan="4" class="empty">No contracts yet. A device without an active contract does not get an active licence.</td></tr>{% endfor %}
   </tbody></table>
 </div>
 
 <div class="card">
-  <h2>Heartbeat terakhir</h2>
-  <table><thead><tr><th>Waktu</th><th>Versi</th><th>Suhu</th><th>Disk</th><th>RAM</th><th>Uptime</th><th>IP LAN</th><th>Tunnel</th><th>Sertifikat s/d</th><th>Meeting 24j</th></tr></thead><tbody>
+  <h2>Recent heartbeats</h2>
+  <table><thead><tr><th>Time</th><th>Version</th><th>Temp</th><th>Disk</th><th>RAM</th><th>Uptime</th><th>LAN IP</th><th>Tunnel</th><th>Cert expires</th><th>Meetings 24h</th></tr></thead><tbody>
   {% for h in heartbeats %}<tr>
     <td>{{ h.ts|dt }}</td><td>{{ h.app_version or '—' }}</td>
     <td>{{ '%.0f°C'|format(h.cpu_temp) if h.cpu_temp is not none else '—' }}</td>
     <td>{{ '%.0f%%'|format(h.disk_pct) if h.disk_pct is not none else '—' }}</td>
     <td>{{ '%.0f%%'|format(h.mem_pct) if h.mem_pct is not none else '—' }}</td>
-    <td>{{ (h.uptime // 3600) ~ ' jam' if h.uptime is not none else '—' }}</td>
+    <td>{{ (h.uptime // 3600) ~ ' h' if h.uptime is not none else '—' }}</td>
     <td class="mono">{{ h.lan_ip or '—' }}</td>
-    <td>{{ {True:'ok', False:'putus'}.get(h.tunnel_ok, '—') }}</td>
+    <td>{{ {True:'ok', False:'down'}.get(h.tunnel_ok, '—') }}</td>
     <td>{{ h.cert_expires_at|dt(False) }}</td>
     <td>{{ h.meetings_count_24h if h.meetings_count_24h is not none else '—' }}</td>
-  </tr>{% else %}<tr><td colspan="10" class="empty">Belum ada heartbeat.</td></tr>{% endfor %}
+  </tr>{% else %}<tr><td colspan="10" class="empty">No heartbeats yet.</td></tr>{% endfor %}
   </tbody></table>
 </div>
 
 <div class="card">
-  <h2>Riwayat</h2>
+  <h2>History</h2>
   <table><tbody>
   {% for a in history %}<tr><td>{{ a.ts|dt }}</td><td>{{ a.actor }}</td><td>{{ a.action }}</td><td class="muted small">{{ a.detail or '' }}</td></tr>
-  {% else %}<tr><td class="empty">Belum ada.</td></tr>{% endfor %}
+  {% else %}<tr><td class="empty">Nothing yet.</td></tr>{% endfor %}
   </tbody></table>
 </div>
 {% endblock %}

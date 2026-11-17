@@ -1,26 +1,27 @@
 {% extends "base.html" %}
-{% from "_macros.html" import device_table, logo_form, logo_preview with context %}
+{% from "_macros.html" import device_table, logo_form, logo_preview, tagline_form with context %}
 {% block content %}
-<div class="head"><h1>{{ client.name }}</h1><div><a class="button" href="/clients/{{ client.id }}/edit">Ubah</a> <a class="button primary" href="/contracts/new?client_id={{ client.id }}">+ Kontrak</a></div></div>
+<div class="head"><h1>{{ client.name }}</h1><div><a class="button" href="/clients/{{ client.id }}/edit">Edit</a> <a class="button primary" href="/contracts/new?client_id={{ client.id }}">+ Contract</a></div></div>
 <div class="card">
   <dl>
     <dt>Email</dt><dd>{{ client.contact_email or '—' }}</dd>
-    <dt>Telepon</dt><dd>{{ client.contact_phone or '—' }}</dd>
-    <dt>Catatan</dt><dd class="pre">{{ client.notes or '—' }}</dd>
+    <dt>Phone</dt><dd>{{ client.contact_phone or '—' }}</dd>
+    <dt>Notes</dt><dd class="pre">{{ client.notes or '—' }}</dd>
   </dl>
 </div>
 <div class="card">
-  <h2>Logo layar device</h2>
+  <h2>Device screen branding</h2>
   {% if logo %}{{ logo_preview(logo) }}
-  {% elif global_logo %}<p class="muted">Memakai logo default. Unggah di sini untuk logo khusus client ini.</p>
-  {% else %}<p class="muted">Belum ada logo (default maupun khusus). Layar menampilkan tulisan VIPCON.</p>{% endif %}
+  {% elif global_logo %}<p class="muted">Using the default logo. Upload one here to give this client its own logo.</p>
+  {% else %}<p class="muted">No logo (default or client). The screen shows the VIPCON wordmark.</p>{% endif %}
   {{ logo_form(logo, client.id) }}
+  {{ tagline_form(tagline, tagline_max, client.id, global_tagline) }}
 </div>
-<h2>Device</h2>
+<h2>Devices</h2>
 {{ device_table(rows, show_client=False) }}
-<h2>Kontrak</h2>
-<table><thead><tr><th>Device</th><th>Plan</th><th>Periode</th><th>Status</th><th>Harga</th></tr></thead><tbody>
-{% for c in contracts %}<tr><td class="mono">{{ c.device.device_id }}</td><td>{{ c.plan.name }}</td><td><a href="/contracts/{{ c.id }}">{{ c.start_date }} → {{ c.end_date }}</a></td><td>{{ c.status }}</td><td>Rp {{ c.price_agreed|money }}</td></tr>
-{% else %}<tr><td colspan="5" class="empty">Belum ada kontrak.</td></tr>{% endfor %}
+<h2>Contracts</h2>
+<table><thead><tr><th>Device</th><th>Plan</th><th>Period</th><th>Status</th><th>Price</th></tr></thead><tbody>
+{% for c in contracts %}<tr><td class="mono">{{ c.device.device_id }}</td><td>{{ c.plan.name }}</td><td><a href="/contracts/{{ c.id }}">{{ c.start_date }} → {{ c.end_date }}</a></td><td>{{ c.status }}</td><td>{{ CURRENCY }} {{ c.price_agreed|money }}</td></tr>
+{% else %}<tr><td colspan="5" class="empty">No contracts yet.</td></tr>{% endfor %}
 </tbody></table>
 {% endblock %}

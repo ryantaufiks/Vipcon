@@ -219,19 +219,19 @@ def claim(req: ClaimRequest, db=Depends(get_db)):
     display_name = req.display_name.strip()[:80]
     org_name = req.org_name.strip()[:100]
     if not USERNAME_RE.match(username):
-        raise HTTPException(422, "Username 3-32 karakter: huruf kecil, angka, titik, minus atau garis bawah.")
+        raise HTTPException(422, "Username must be 3–32 characters: lowercase letters, numbers, dots, hyphens or underscores.")
     if len(req.password) < MIN_PASSWORD:
-        raise HTTPException(422, f"Password minimal {MIN_PASSWORD} karakter.")
+        raise HTTPException(422, f"Password must be at least {MIN_PASSWORD} characters.")
     if req.password.lower() == username:
-        raise HTTPException(422, "Password tidak boleh sama dengan username.")
+        raise HTTPException(422, "Password must not be the same as the username.")
     if not req.claim_code or len(req.claim_code) > 128:
-        raise HTTPException(400, "Kode aktivasi tidak valid.")
+        raise HTTPException(400, "Invalid activation code.")
     if not CONTROL_PLANE_URL or not DEVICE_ID:
-        raise HTTPException(503, "Device belum diprovisi.")
+        raise HTTPException(503, "This device has not been provisioned yet.")
     # One claim at a time; the control plane also only accepts the code once.
     with _claim_lock:
         if db.query(User).first() is not None:
-            raise HTTPException(409, "Device ini sudah diaktivasi. Silakan masuk.")
+            raise HTTPException(409, "This device is already activated. Please sign in.")
         try:
             r = requests.post(
                 f"{CONTROL_PLANE_URL}/api/v1/claim/verify",
@@ -239,13 +239,13 @@ def claim(req: ClaimRequest, db=Depends(get_db)):
                 timeout=10,
             )
         except requests.RequestException:
-            raise HTTPException(502, "Tidak bisa menghubungi server Vipcon. Periksa koneksi internet device.")
+            raise HTTPException(502, "Cannot reach the Vipcon server. Check the device's internet connection.")
         if r.status_code == 403:
-            raise HTTPException(403, "Device ini sedang ditangguhkan. Hubungi admin Vipcon.")
+            raise HTTPException(403, "This device is suspended. Please contact your Vipcon administrator.")
         if r.status_code == 409:
-            raise HTTPException(409, "Kode aktivasi sudah pernah dipakai. Minta admin Vipcon membuat kode baru.")
+            raise HTTPException(409, "This activation code has already been used. Ask your Vipcon administrator for a new one.")
         if r.status_code != 200:
-            raise HTTPException(400, "Kode aktivasi tidak valid atau sudah dipakai.")
+            raise HTTPException(400, "The activation code is invalid or has already been used.")
         user = User(
             username=username,
             display_name=display_name or username,

@@ -18,23 +18,23 @@ from services import audit
 
 def ask_password():
     while True:
-        pw = getpass.getpass("Password (min 12 karakter): ")
+        pw = getpass.getpass("Password (min 12 characters): ")
         if len(pw) < 12:
-            print("Terlalu pendek.")
+            print("Too short.")
             continue
-        if pw != getpass.getpass("Ulangi password: "):
-            print("Tidak sama.")
+        if pw != getpass.getpass("Confirm password: "):
+            print("Passwords do not match.")
             continue
         return pw
 
 
 def show_totp(secret, email):
     uri = totp_uri(secret, email)
-    print("\nScan QR ini dengan aplikasi authenticator (Google Authenticator, Aegis, 1Password):\n")
+    print("\nScan this QR code with an authenticator app (Google Authenticator, Aegis, 1Password):\n")
     qr = qrcode.QRCode(border=1)
     qr.add_data(uri)
     qr.print_ascii(invert=True)
-    print(f"\nAtau masukkan secret manual: {secret}\n")
+    print(f"\nOr enter the secret manually: {secret}\n")
 
 
 def main(argv):
@@ -48,17 +48,17 @@ def main(argv):
         admin = db.query(SuperAdmin).filter_by(email=email).first()
         if command == "create-superadmin":
             if admin:
-                print("Superadmin sudah ada.")
+                print("Superadmin already exists.")
                 return 1
             secret = new_totp_secret()
             db.add(SuperAdmin(email=email, password_hash=hash_password(ask_password()), totp_secret=secret))
             audit(db, "cli", "superadmin.created", email)
             db.commit()
             show_totp(secret, email)
-            print("Superadmin dibuat.")
+            print("Superadmin created.")
             return 0
         if not admin:
-            print("Superadmin tidak ditemukan.")
+            print("Superadmin not found.")
             return 1
         if command == "reset-2fa":
             admin.totp_secret = new_totp_secret()
@@ -72,7 +72,7 @@ def main(argv):
             admin.locked_until = None
             audit(db, "cli", "superadmin.password_reset", email)
             db.commit()
-            print("Password diganti.")
+            print("Password changed.")
         return 0
     finally:
         db.close()

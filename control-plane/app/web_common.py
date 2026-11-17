@@ -28,12 +28,13 @@ def fmt_dt(value, with_time=True):
 
 
 def fmt_money(value):
-    return f"{value or 0:,}".replace(",", ".")
+    return f"{value or 0:,}"
 
 
 templates.env.filters["dt"] = fmt_dt
 templates.env.filters["money"] = fmt_money
 templates.env.globals["ROOT_DOMAIN"] = ROOT_DOMAIN
+templates.env.globals["CURRENCY"] = env("CURRENCY", "SGD")
 
 
 def client_ip(request: Request):

@@ -178,14 +178,14 @@ def normalize_logo(data):
     from PIL import Image, UnidentifiedImageError
 
     if not data:
-        raise LogoError("File kosong.")
+        raise LogoError("The file is empty.")
     if len(data) > LOGO_MAX_UPLOAD:
-        raise LogoError("File terlalu besar (maks 2 MB).")
+        raise LogoError("The file is too large (max 2 MB).")
     Image.MAX_IMAGE_PIXELS = 25_000_000
     try:
         with Image.open(io.BytesIO(data)) as probe:
             if probe.format not in ("PNG", "JPEG", "WEBP"):
-                raise LogoError("Format harus PNG, JPG atau WEBP.")
+                raise LogoError("The image must be PNG, JPG or WEBP.")
             probe.verify()
         with Image.open(io.BytesIO(data)) as img:
             img.load()
@@ -193,7 +193,7 @@ def normalize_logo(data):
     except LogoError:
         raise
     except (UnidentifiedImageError, OSError, Image.DecompressionBombError, SyntaxError):
-        raise LogoError("File bukan gambar yang valid.")
+        raise LogoError("The file is not a valid image.")
     bbox = img.getbbox()  # trim fully transparent borders
     if bbox:
         img = img.crop(bbox)
@@ -230,3 +230,37 @@ def get_logo(db, client_id):
 def logo_for_device(db, device):
     """The client's own logo wins; otherwise the global default; otherwise None."""
     return (device.client_id and get_logo(db, device.client_id)) or get_logo(db, None)
+
+
+TAGLINE_MAX = 40  # fits one line under the logo on a 480 px panel
+
+
+def get_tagline(db, client_id):
+    from models import BrandingText
+
+    q = db.query(BrandingText)
+    return (q.filter(BrandingText.client_id.is_(None)) if client_id is None
+            else q.filter(BrandingText.client_id == client_id)).first()
+
+
+def set_tagline(db, client_id, text):
+    """Empty text removes the row: a client then falls back to the default tagline."""
+    from models import BrandingText
+
+    text = " ".join((text or "").split())[:TAGLINE_MAX]
+    row = get_tagline(db, client_id)
+    if not text:
+        if row:
+            db.delete(row)
+        return None
+    if row is None:
+        row = BrandingText(client_id=client_id)
+        db.add(row)
+    row.tagline = text
+    row.updated_at = now()
+    return row
+
+
+def tagline_for_device(db, device):
+    row = (device.client_id and get_tagline(db, device.client_id)) or get_tagline(db, None)
+    return row.tagline if row else None

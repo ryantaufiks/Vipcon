@@ -10,7 +10,7 @@ from pydantic import BaseModel
 from db import get_db
 from models import Device, Heartbeat, now
 from security import LICENSE_PUBLIC_PEM, decrypt_secret, sha256_hex, verify_device_signature
-from services import audit, issue_license, license_status, logo_for_device
+from services import audit, issue_license, license_status, logo_for_device, tagline_for_device
 from web_common import client_ip
 
 router = APIRouter(prefix="/api/v1")
@@ -90,6 +90,7 @@ def heartbeat(request: Request, device=Depends(signed_device), db=Depends(get_db
         "claimed": device.claimed_at is not None,
         "client_name": device.client.name if device.client else None,
         "logo_sha256": logo.sha256 if logo else None,
+        "tagline": tagline_for_device(db, device),
     }
 
 

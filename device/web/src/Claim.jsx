@@ -36,15 +36,15 @@ export default function Claim({ theme, onToggleTheme }) {
     setError('')
     const user = username.trim().toLowerCase()
     if (!/^[a-z0-9][a-z0-9._-]{2,31}$/.test(user)) {
-      setError('Username 3–32 karakter: huruf kecil, angka, titik, minus atau garis bawah.')
+      setError('Username must be 3–32 characters: lowercase letters, numbers, dots, hyphens or underscores.')
       return
     }
     if (password.length < MIN_PASSWORD) {
-      setError(`Password minimal ${MIN_PASSWORD} karakter.`)
+      setError(`Password must be at least ${MIN_PASSWORD} characters.`)
       return
     }
     if (password !== confirm) {
-      setError('Konfirmasi password tidak sama.')
+      setError('Passwords do not match.')
       return
     }
     setBusy(true)
@@ -70,7 +70,7 @@ export default function Claim({ theme, onToggleTheme }) {
   const header = (
     <header className="topbar">
       <div className="brand">VIP<span>CON</span></div>
-      <button className="icon-btn" onClick={onToggleTheme} title="Ganti tema">
+      <button className="icon-btn" onClick={onToggleTheme} title="Toggle theme">
         {theme === 'dark' ? <Sun /> : <Moon />}
       </button>
     </header>
@@ -90,34 +90,35 @@ export default function Claim({ theme, onToggleTheme }) {
 
   if (done) {
     return (
-      <Card title="Device aktif">
+      <Card title="Device activated">
         <p className="setup-sub">
-          Akun Client Admin <strong>{username.trim().toLowerCase()}</strong> sudah dibuat. Dari dashboard Anda bisa
-          menambah pengguna dan membuat meeting.
+          The Client Admin account <strong>{username.trim().toLowerCase()}</strong> has been created. From the
+          dashboard you can add users and create meetings.
         </p>
-        <a className="btn btn-primary setup-download" href="/admin">Buka dashboard</a>
+        <a className="btn btn-primary setup-download" href="/admin">Open dashboard</a>
       </Card>
     )
   }
 
   if (status === null) {
-    return <Card title="Aktivasi Vipcon"><div className="room-connecting">Memeriksa device…</div></Card>
+    return <Card title="Activate Vipcon"><div className="room-connecting">Checking device…</div></Card>
   }
 
   if (status.claimed) {
     return (
-      <Card title="Sudah diaktivasi">
-        <p className="setup-sub">Device ini sudah punya Client Admin. Masuk dengan akun yang sudah dibuat.</p>
-        <a className="btn btn-primary setup-download" href="/admin">Masuk</a>
+      <Card title="Already activated">
+        <p className="setup-sub">This device already has a Client Admin. Sign in with that account.</p>
+        <a className="btn btn-primary setup-download" href="/admin">Sign in</a>
       </Card>
     )
   }
 
   if (!code) {
     return (
-      <Card title="Link aktivasi tidak lengkap">
+      <Card title="Incomplete activation link">
         <p className="setup-sub">
-          Sentuh layar device, lalu scan ulang QR aktivasi yang tampil. Link harus dibuka langsung dari QR tersebut.
+          Touch the device's screen and scan the activation QR code again. The link must be opened directly from
+          that QR code.
         </p>
       </Card>
     )
@@ -127,21 +128,21 @@ export default function Claim({ theme, onToggleTheme }) {
     <div className="prejoin">
       {header}
       <form className="prejoin-card" onSubmit={submit}>
-        <h1>Aktivasi Vipcon</h1>
+        <h1>Activate Vipcon</h1>
         <p className="setup-sub">
-          Buat akun <strong>Client Admin</strong> untuk device ini. Akun ini mengelola pengguna dan meeting, dan hanya
-          bisa dibuat sekali.
+          Create the <strong>Client Admin</strong> account for this device. This account manages users and meetings,
+          and can only be created once.
         </p>
         {status.device_id && <p className="room-code">{status.device_id}</p>}
         <label className="field">
-          <span className="field-label">Nama organisasi <em>opsional</em></span>
+          <span className="field-label">Organisation name <em>optional</em></span>
           <input value={orgName} onChange={(e) => setOrgName(e.target.value)} maxLength={100}
-                 placeholder="PT Contoh" autoComplete="organization" />
+                 placeholder="Example Pte Ltd" autoComplete="organization" />
         </label>
         <label className="field">
-          <span className="field-label">Nama lengkap</span>
+          <span className="field-label">Full name</span>
           <input value={displayName} onChange={(e) => setDisplayName(e.target.value)} maxLength={80}
-                 placeholder="Nama Anda" autoComplete="name" required />
+                 placeholder="Your name" autoComplete="name" required />
         </label>
         <label className="field">
           <span className="field-label">Username</span>
@@ -149,18 +150,18 @@ export default function Claim({ theme, onToggleTheme }) {
                  placeholder="admin" autoComplete="username" autoCapitalize="none" spellCheck={false} required />
         </label>
         <label className="field">
-          <span className="field-label">Password <em>min. {MIN_PASSWORD} karakter</em></span>
+          <span className="field-label">Password <em>min. {MIN_PASSWORD} characters</em></span>
           <input type="password" value={password} onChange={(e) => setPassword(e.target.value)}
                  autoComplete="new-password" minLength={MIN_PASSWORD} required />
         </label>
         <label className="field">
-          <span className="field-label">Ulangi password</span>
+          <span className="field-label">Confirm password</span>
           <input type="password" value={confirm} onChange={(e) => setConfirm(e.target.value)}
                  autoComplete="new-password" required />
         </label>
-        {status.unreachable && <p className="form-info">Device tidak merespons. Pastikan HP Anda terhubung ke jaringan yang benar.</p>}
+        {status.unreachable && <p className="form-info">The device is not responding. Make sure your phone is on the right network.</p>}
         {error && <p className="form-error" role="alert">{error}</p>}
-        <button className="btn btn-primary" disabled={busy}>{busy ? 'Mengaktifkan…' : 'Aktifkan device'}</button>
+        <button className="btn btn-primary" disabled={busy}>{busy ? 'Activating…' : 'Activate device'}</button>
       </form>
     </div>
   )

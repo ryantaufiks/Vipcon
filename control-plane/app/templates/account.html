@@ -1,21 +1,21 @@
 {% extends "base.html" %}
 {% from "_macros.html" import csrf_field with context %}
 {% block content %}
-<h1>Akun</h1>
+<h1>Account</h1>
 <div class="grid2">
   <form method="post" action="/account/password" class="card">
     {{ csrf_field() }}
-    <h2>Ganti password</h2>
-    <label>Password lama <input type="password" name="current" autocomplete="current-password" required></label>
-    <label>Password baru <input type="password" name="new" minlength="12" autocomplete="new-password" required></label>
-    <label>Ulangi password baru <input type="password" name="confirm" minlength="12" autocomplete="new-password" required></label>
-    <button class="primary">Simpan</button>
+    <h2>Change password</h2>
+    <label>Current password <input type="password" name="current" autocomplete="current-password" required></label>
+    <label>New password <input type="password" name="new" minlength="12" autocomplete="new-password" required></label>
+    <label>Confirm new password <input type="password" name="confirm" minlength="12" autocomplete="new-password" required></label>
+    <button class="primary">Save</button>
   </form>
   <div class="card">
     <h2>2FA</h2>
-    <p>2FA wajib untuk semua superadmin. Untuk reset authenticator, jalankan di server:</p>
+    <p>2FA is mandatory for every superadmin. To reset an authenticator, run this on the server:</p>
     <pre>docker compose exec app python cli.py reset-2fa {{ admin.email }}</pre>
-    <p class="muted">Login terakhir: {{ admin.last_login|dt }}</p>
+    <p class="muted">Last sign-in: {{ admin.last_login|dt }}</p>
   </div>
 </div>
 {% endblock %}

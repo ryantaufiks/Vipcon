@@ -110,7 +110,7 @@ def test_csrf_required(client, admin):
 def test_full_device_lifecycle(client, admin):
     r = client.post(
         "/plans",
-        data={"csrf": admin, "name": "Standard", "connectivity_mode": "standard", "price_monthly": "1.500.000",
+        data={"csrf": admin, "name": "Standard", "connectivity_mode": "standard", "price_monthly": "1,500",
               "max_participants": "10", "max_users": "20", "max_concurrent_meetings": "5", "active": "on"},
         follow_redirects=False,
     )
@@ -245,7 +245,7 @@ def test_branding_logo_reaches_the_device(client, admin, tmp_path):
     )
     # Not an image -> rejected, nothing stored.
     assert up({"logo": ("x.png", b"<svg onload=alert(1)>", "image/png")}).status_code == 303
-    assert "Belum ada logo" in client.get("/branding").text
+    assert "No logo yet" in client.get("/branding").text
     # CSRF still enforced on multipart.
     r = client.post("/branding/logo", data={"action": "upload"}, files={"logo": ("a.png", png_bytes("red"), "image/png")})
     assert r.status_code == 403
@@ -267,10 +267,24 @@ def test_branding_logo_reaches_the_device(client, admin, tmp_path):
 
     hb = signed(client, agent, "/api/v1/heartbeat", {}).json()
     assert hb["logo_sha256"] == global_sha and hb["client_name"] == "PT Logo" and hb["claimed"] is False
+    assert hb["tagline"] is None
+
+    # Tagline: global default, client override, empty override falls back to the default.
+    tag = lambda text, **data: client.post(  # noqa: E731
+        "/branding/tagline", data={"csrf": admin, "tagline": text, **data}, follow_redirects=False)
+    assert tag("  Secure   Video Conferencing ").status_code == 303
+    assert signed(client, agent, "/api/v1/heartbeat", {}).json()["tagline"] == "Secure Video Conferencing"
+    tag("Private Meetings", client_id=str(client_id))
+    assert signed(client, agent, "/api/v1/heartbeat", {}).json()["tagline"] == "Private Meetings"
+    tag("", client_id=str(client_id))
+    hb = signed(client, agent, "/api/v1/heartbeat", {}).json()
+    assert hb["tagline"] == "Secure Video Conferencing"
+    assert client.post("/branding/tagline", data={"tagline": "x"}).status_code == 403  # CSRF
     agent.update_kiosk(hb)
     assert hashlib.sha256((tmp_path / "logo.png").read_bytes()).hexdigest() == global_sha
     state = json.loads((tmp_path / "state.json").read_text())
     assert state["client_name"] == "PT Logo" and state["claimed"] is False
+    assert state["tagline"] == "Secure Video Conferencing"
 
     # A client logo overrides the default, and is resized for the 480 px panel.
     assert up({"logo": ("c.png", png_bytes((0, 0, 255, 255), (2000, 1000)), "image/png")},
@@ -294,4 +308,4 @@ def test_branding_logo_reaches_the_device(client, admin, tmp_path):
     agent.update_kiosk(hb)
     assert not (tmp_path / "logo.png").exists()
     audit = client.get("/audit").text
-    assert "branding.logo_set" in audit and "branding.logo_removed" in audit
+    assert "branding.logo_set" in audit and "branding.logo_removed" in audit and "branding.tagline_set" in audit

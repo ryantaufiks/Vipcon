@@ -1,13 +1,13 @@
 {% extends "base.html" %}
 {% from "_macros.html" import csrf_field with context %}
 {% block content %}
-<h1>{{ 'Ubah client' if client else 'Client baru' }}</h1>
+<h1>{{ 'Edit client' if client else 'New client' }}</h1>
 <form method="post" action="{{ '/clients/%d'|format(client.id) if client else '/clients' }}" class="card narrow">
   {{ csrf_field() }}
-  <label>Nama <input name="name" value="{{ client.name if client else '' }}" required></label>
-  <label>Email kontak <input type="email" name="contact_email" value="{{ client.contact_email or '' if client else '' }}"></label>
-  <label>Telepon kontak <input name="contact_phone" value="{{ client.contact_phone or '' if client else '' }}"></label>
-  <label>Catatan <textarea name="notes" rows="4">{{ client.notes or '' if client else '' }}</textarea></label>
-  <button class="primary">Simpan</button>
+  <label>Name <input name="name" value="{{ client.name if client else '' }}" required></label>
+  <label>Contact email <input type="email" name="contact_email" value="{{ client.contact_email or '' if client else '' }}"></label>
+  <label>Contact phone <input name="contact_phone" value="{{ client.contact_phone or '' if client else '' }}"></label>
+  <label>Notes <textarea name="notes" rows="4">{{ client.notes or '' if client else '' }}</textarea></label>
+  <button class="primary">Save</button>
 </form>
 {% endblock %}

@@ -1,26 +1,26 @@
 {% extends "base.html" %}
 {% from "_macros.html" import csrf_field with context %}
 {% block content %}
-<h1>Device baru</h1>
+<h1>New device</h1>
 <form method="post" action="/devices" class="card narrow">
   {{ csrf_field() }}
-  <label>Label (opsional) <input name="label" placeholder="mis. Ruang rapat lt. 12"></label>
+  <label>Label (optional) <input name="label" placeholder="e.g. Level 12 boardroom"></label>
   <label>Client
-    <select name="client_id"><option value="">— Inventaris (belum ada client) —</option>
+    <select name="client_id"><option value="">— Inventory (no client yet) —</option>
       {% for c in clients %}<option value="{{ c.id }}">{{ c.name }}</option>{% endfor %}
     </select>
   </label>
   <label>Plan
-    <select name="plan_id"><option value="">— Belum ditentukan —</option>
+    <select name="plan_id"><option value="">— Not set —</option>
       {% for p in plans %}<option value="{{ p.id }}">{{ p.name }} ({{ p.connectivity_mode }})</option>{% endfor %}
     </select>
   </label>
-  <label>Mode konektivitas
-    <select name="connectivity_mode"><option value="">Ikuti plan</option>
+  <label>Connectivity mode
+    <select name="connectivity_mode"><option value="">Follow plan</option>
       {% for m in modes %}<option value="{{ m }}">{{ m }}</option>{% endfor %}
     </select>
   </label>
-  <p class="muted small">Setelah dibuat, <code>device.json</code>, claim code dan QR hanya ditampilkan sekali. Simpan sebelum meninggalkan halaman.</p>
-  <button class="primary">Buat device</button>
+  <p class="muted small">After creation, <code>device.json</code>, the claim code and the QR code are shown only once. Save them before leaving the page.</p>
+  <button class="primary">Create device</button>
 </form>
 {% endblock %}

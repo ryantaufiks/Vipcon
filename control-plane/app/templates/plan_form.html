@@ -1,24 +1,24 @@
 {% extends "base.html" %}
 {% from "_macros.html" import csrf_field with context %}
 {% block content %}
-<h1>{{ 'Ubah plan' if plan else 'Plan baru' }}</h1>
+<h1>{{ 'Edit plan' if plan else 'New plan' }}</h1>
 <form method="post" action="{{ '/plans/%d'|format(plan.id) if plan else '/plans' }}" class="card narrow">
   {{ csrf_field() }}
-  <label>Nama <input name="name" value="{{ plan.name if plan else '' }}" required></label>
-  <label>Mode konektivitas
+  <label>Name <input name="name" value="{{ plan.name if plan else '' }}" required></label>
+  <label>Connectivity mode
     <select name="connectivity_mode">{% for m in modes %}<option {{ 'selected' if plan and m == plan.connectivity_mode }}>{{ m }}</option>{% endfor %}</select>
   </label>
   <div class="row">
-    <label>Harga / bulan (Rp) <input name="price_monthly" inputmode="numeric" value="{{ plan.price_monthly if plan else 0 }}"></label>
-    <label>Harga / tahun (Rp) <input name="price_yearly" inputmode="numeric" value="{{ plan.price_yearly if plan else 0 }}"></label>
+    <label>Price / month ({{ CURRENCY }}) <input name="price_monthly" inputmode="numeric" value="{{ plan.price_monthly if plan else 0 }}"></label>
+    <label>Price / year ({{ CURRENCY }}) <input name="price_yearly" inputmode="numeric" value="{{ plan.price_yearly if plan else 0 }}"></label>
   </div>
   <div class="row">
-    <label>Maks peserta / meeting <input type="number" name="max_participants" min="1" max="100" value="{{ plan.max_participants if plan else 10 }}"></label>
-    <label>Maks user <input type="number" name="max_users" min="1" max="1000" value="{{ plan.max_users if plan else 20 }}"></label>
-    <label>Maks meeting bersamaan <input type="number" name="max_concurrent_meetings" min="1" max="50" value="{{ plan.max_concurrent_meetings if plan else 5 }}"></label>
+    <label>Max participants / meeting <input type="number" name="max_participants" min="1" max="100" value="{{ plan.max_participants if plan else 10 }}"></label>
+    <label>Max users <input type="number" name="max_users" min="1" max="1000" value="{{ plan.max_users if plan else 20 }}"></label>
+    <label>Max concurrent meetings <input type="number" name="max_concurrent_meetings" min="1" max="50" value="{{ plan.max_concurrent_meetings if plan else 5 }}"></label>
   </div>
-  <label class="check"><input type="checkbox" name="e2ee_default" {{ 'checked' if plan and (plan.features or {}).get('e2ee_default') }}> E2EE aktif secara default</label>
-  <label class="check"><input type="checkbox" name="active" {{ 'checked' if not plan or plan.active }}> Plan aktif (bisa dipilih untuk device baru)</label>
-  <button class="primary">Simpan</button>
+  <label class="check"><input type="checkbox" name="e2ee_default" {{ 'checked' if plan and (plan.features or {}).get('e2ee_default') }}> E2EE on by default</label>
+  <label class="check"><input type="checkbox" name="active" {{ 'checked' if not plan or plan.active }}> Active plan (can be chosen for new devices)</label>
+  <button class="primary">Save</button>
 </form>
 {% endblock %}

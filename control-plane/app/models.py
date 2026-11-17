@@ -80,6 +80,16 @@ class BrandingLogo(Base):
     updated_at = Column(DateTime(timezone=True), default=now, onupdate=now)
 
 
+class BrandingText(Base):
+    """Tagline shown under the logo on the appliance LCD. client_id NULL is the global default."""
+
+    __tablename__ = "branding_texts"
+    id = Column(Integer, primary_key=True)
+    client_id = Column(Integer, ForeignKey("clients.id"), nullable=True, unique=True)
+    tagline = Column(String(60), nullable=False, default="")
+    updated_at = Column(DateTime(timezone=True), default=now, onupdate=now)
+
+
 class Contract(Base):
     __tablename__ = "contracts"
     id = Column(Integer, primary_key=True)

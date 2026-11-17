@@ -1,21 +1,21 @@
 {% extends "base.html" %}
 {% from "_macros.html" import device_table with context %}
 {% block content %}
-<div class="head"><h1>Ringkasan</h1><a class="button primary" href="/devices/new">+ Device baru</a></div>
+<div class="head"><h1>Overview</h1><a class="button primary" href="/devices/new">+ New device</a></div>
 <div class="stats">
-  <div class="stat"><b>{{ stats.devices }}</b><span>device</span></div>
+  <div class="stat"><b>{{ stats.devices }}</b><span>devices</span></div>
   <div class="stat"><b>{{ stats.online }}</b><span>online</span></div>
-  <div class="stat"><b>{{ stats.claimed }}</b><span>sudah diklaim</span></div>
-  <div class="stat"><b>{{ stats.clients }}</b><span>client</span></div>
-  <div class="stat {{ 'warn' if stats.attention }}"><b>{{ stats.attention }}</b><span>lisensi tidak aktif</span></div>
+  <div class="stat"><b>{{ stats.claimed }}</b><span>claimed</span></div>
+  <div class="stat"><b>{{ stats.clients }}</b><span>clients</span></div>
+  <div class="stat {{ 'warn' if stats.attention }}"><b>{{ stats.attention }}</b><span>inactive licences</span></div>
 </div>
 {% if expiring %}
 <div class="card warnbox">
-  <h2>Kontrak berakhir dalam 30 hari</h2>
-  <ul>{% for c in expiring %}<li><a href="/contracts/{{ c.id }}">{{ c.client.name }} · <span class="mono">{{ c.device.device_id }}</span></a> berakhir {{ c.end_date }}</li>{% endfor %}</ul>
+  <h2>Contracts ending within 30 days</h2>
+  <ul>{% for c in expiring %}<li><a href="/contracts/{{ c.id }}">{{ c.client.name }} · <span class="mono">{{ c.device.device_id }}</span></a> ends {{ c.end_date }}</li>{% endfor %}</ul>
 </div>
 {% endif %}
-<h2>Device</h2>
+<h2>Devices</h2>
 {{ device_table(rows) }}
-<p class="muted small">Superadmin hanya melihat metadata perangkat. Nama user, room, peserta, chat, dan media tidak pernah dikirim ke sini.</p>
+<p class="muted small">Superadmins only see device metadata. User names, rooms, participants, chat and media are never sent here.</p>
 {% endblock %}

@@ -165,6 +165,7 @@ def update_kiosk(info):
             "license_status": info.get("license_status"),
             "claimed": bool(info.get("claimed")),
             "client_name": info.get("client_name"),
+            "tagline": info.get("tagline"),
             "updated_at": int(time.time()),
         }
         write_atomic(os.path.join(KIOSK_DIR, "state.json"), json.dumps(state).encode())

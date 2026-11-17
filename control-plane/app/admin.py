@@ -31,12 +31,15 @@ from services import (
     current_contract,
     is_online,
     LOGO_MAX_UPLOAD,
+    TAGLINE_MAX,
     LogoError,
     get_logo,
+    get_tagline,
     license_status,
     new_claim_code,
     provisioning_bundle,
     set_logo,
+    set_tagline,
 )
 from web_common import check_csrf, client_ip, current_admin, redirect, render
 
@@ -67,13 +70,13 @@ def text(form, key, required=False, max_len=200):
 
 
 def integer(form, key, default=0, minimum=0, maximum=10**12):
-    raw = str(form.get(key) or "").strip().replace(".", "")
+    raw = str(form.get(key) or "").strip().replace(",", "").replace(" ", "")
     if raw == "":
         return default
     try:
         value = int(raw)
     except ValueError:
-        raise HTTPException(400, f"{key} must be a number")
+        raise HTTPException(400, f"{key} must be a whole number")
     if not minimum <= value <= maximum:
         raise HTTPException(400, f"{key} must be between {minimum} and {maximum}")
     return value
@@ -117,15 +120,15 @@ def login_page(request: Request):
 async def login(request: Request, db=Depends(get_db)):
     form = await request.form()
     ip = client_ip(request)
-    error = "Email, password atau kode 2FA salah."
+    error = "Incorrect email, password or 2FA code."
     if _ip_rate_limited(ip):
-        return render(request, "login.html", status_code=429, error="Terlalu banyak percobaan. Coba lagi sebentar.")
+        return render(request, "login.html", status_code=429, error="Too many attempts. Please wait a moment and try again.")
     email = str(form.get("email") or "").strip().lower()
     admin = db.query(SuperAdmin).filter_by(email=email, active=True).first()
     if not admin:
         return render(request, "login.html", status_code=401, error=error, email=email)
     if admin.locked_until and aware(admin.locked_until) > now():
-        return render(request, "login.html", status_code=423, error="Akun dikunci sementara. Coba lagi nanti.")
+        return render(request, "login.html", status_code=423, error="Account temporarily locked. Please try again later.")
     step = None
     if verify_password(str(form.get("password") or ""), admin.password_hash):
         step = verify_totp(admin.totp_secret, str(form.get("totp") or ""), admin.last_totp_step)
@@ -175,16 +178,16 @@ def account_page(request: Request, admin=Depends(current_admin)):
 async def change_password(request: Request, admin=Depends(current_admin), db=Depends(get_db)):
     form = await check_csrf(request)
     if not verify_password(str(form.get("current") or ""), admin.password_hash):
-        return render(request, "account.html", status_code=400, error="Password lama salah.")
+        return render(request, "account.html", status_code=400, error="Current password is incorrect.")
     new = str(form.get("new") or "")
     if len(new) < 12:
-        return render(request, "account.html", status_code=400, error="Password baru minimal 12 karakter.")
+        return render(request, "account.html", status_code=400, error="New password must be at least 12 characters.")
     if new != str(form.get("confirm") or ""):
-        return render(request, "account.html", status_code=400, error="Konfirmasi password tidak sama.")
+        return render(request, "account.html", status_code=400, error="Passwords do not match.")
     admin.password_hash = hash_password(new)
     audit(db, admin.email, "superadmin.password_changed", admin.email, client_ip(request))
     db.commit()
-    return redirect("/account", "Password diganti.")
+    return redirect("/account", "Password changed.")
 
 
 # ---------------------------------------------------------------- dashboard
@@ -269,7 +272,7 @@ async def plan_create(request: Request, admin=Depends(current_admin), db=Depends
     db.flush()
     audit(db, admin.email, "plan.created", plan.id, client_ip(request), name=plan.name)
     db.commit()
-    return redirect("/plans", f"Plan {plan.name} dibuat.")
+    return redirect("/plans", f"Plan {plan.name} created.")
 
 
 @router.post("/plans/{plan_id}")
@@ -279,7 +282,7 @@ async def plan_update(plan_id: int, request: Request, admin=Depends(current_admi
     apply_plan_form(plan, form)
     audit(db, admin.email, "plan.updated", plan.id, client_ip(request), name=plan.name)
     db.commit()
-    return redirect("/plans", f"Plan {plan.name} disimpan.")
+    return redirect("/plans", f"Plan {plan.name} saved.")
 
 
 # ---------------------------------------------------------------- clients
@@ -310,6 +313,9 @@ def client_detail(client_id: int, request: Request, admin=Depends(current_admin)
         contracts=contracts,
         logo=get_logo(db, client.id),
         global_logo=get_logo(db, None),
+        tagline=get_tagline(db, client.id),
+        global_tagline=get_tagline(db, None),
+        tagline_max=TAGLINE_MAX,
     )
 
 
@@ -334,7 +340,7 @@ async def client_create(request: Request, admin=Depends(current_admin), db=Depen
     db.flush()
     audit(db, admin.email, "client.created", client.id, client_ip(request), name=client.name)
     db.commit()
-    return redirect(f"/clients/{client.id}", f"Client {client.name} dibuat.")
+    return redirect(f"/clients/{client.id}", f"Client {client.name} created.")
 
 
 @router.post("/clients/{client_id}")
@@ -344,7 +350,7 @@ async def client_update(client_id: int, request: Request, admin=Depends(current_
     apply_client_form(client, form)
     audit(db, admin.email, "client.updated", client.id, client_ip(request), name=client.name)
     db.commit()
-    return redirect(f"/clients/{client.id}", "Client disimpan.")
+    return redirect(f"/clients/{client.id}", "Client saved.")
 
 
 # ---------------------------------------------------------------- branding
@@ -358,7 +364,10 @@ def branding(request: Request, admin=Depends(current_admin), db=Depends(get_db))
         .order_by(Client.name)
         .all()
     )
-    return render(request, "branding.html", logo=get_logo(db, None), custom=custom)
+    return render(
+        request, "branding.html", logo=get_logo(db, None), custom=custom,
+        tagline=get_tagline(db, None), tagline_max=TAGLINE_MAX,
+    )
 
 
 @router.get("/branding/logo/{logo_id}.png")
@@ -380,19 +389,32 @@ async def branding_logo_update(request: Request, admin=Depends(current_admin), d
             db.delete(logo)
             audit(db, admin.email, "branding.logo_removed", target, client_ip(request))
             db.commit()
-        return redirect(back, "Logo dihapus.")
+        return redirect(back, "Logo removed.")
     upload = form.get("logo")
     if upload is None or not hasattr(upload, "read"):
-        return redirect(back, "Pilih file logo dulu.")
+        return redirect(back, "Choose a logo file first.")
     data = await upload.read(LOGO_MAX_UPLOAD + 1)
     try:
         logo = set_logo(db, client_id, data)
     except LogoError as e:
-        return redirect(back, f"Logo ditolak: {e}")
+        return redirect(back, f"Logo rejected: {e}")
     audit(db, admin.email, "branding.logo_set", target, client_ip(request),
           sha256=logo.sha256, width=logo.width, height=logo.height)
     db.commit()
-    return redirect(back, "Logo disimpan. Device akan mengambilnya pada heartbeat berikutnya.")
+    return redirect(back, "Logo saved. Devices pick it up on their next heartbeat.")
+
+
+@router.post("/branding/tagline")
+async def branding_tagline_update(request: Request, admin=Depends(current_admin), db=Depends(get_db)):
+    form = await check_csrf(request)
+    client_id = optional_id(form, "client_id")
+    client = get_or_404(db, Client, client_id) if client_id else None
+    row = set_tagline(db, client_id, str(form.get("tagline") or ""))
+    audit(db, admin.email, "branding.tagline_set", f"client:{client.id}" if client else "global",
+          client_ip(request), tagline=row.tagline if row else None)
+    db.commit()
+    return redirect(f"/clients/{client.id}" if client else "/branding",
+                    "Tagline saved." if row else "Tagline removed.")
 
 
 # ---------------------------------------------------------------- devices
@@ -481,7 +503,7 @@ async def device_update(device_id: str, request: Request, admin=Depends(current_
     after = {"client_id": device.client_id, "plan_id": device.plan_id, "mode": device.connectivity_mode}
     audit(db, admin.email, "device.updated", device.device_id, client_ip(request), before=before, after=after)
     db.commit()
-    return redirect(f"/devices/{device.device_id}", "Device disimpan.")
+    return redirect(f"/devices/{device.device_id}", "Device saved.")
 
 
 STATUS_ACTIONS = {
@@ -500,12 +522,12 @@ async def device_status(device_id: str, request: Request, admin=Depends(current_
     if device.status not in allowed_from:
         raise HTTPException(409, f"cannot {action} a {device.status} device")
     if action == "revoke" and text(form, "confirm_id") != device.device_id:
-        return redirect(f"/devices/{device.device_id}", "Revoke dibatalkan: ketik device ID dengan benar untuk konfirmasi.")
+        return redirect(f"/devices/{device.device_id}", "Revoke cancelled: type the device ID exactly to confirm.")
     before = device.status
     device.status = target or ("claimed" if device.claimed_at else "provisioned")
     audit(db, admin.email, f"device.{action}", device.device_id, client_ip(request), before=before, after=device.status)
     db.commit()
-    return redirect(f"/devices/{device.device_id}", f"Status device: {device.status}.")
+    return redirect(f"/devices/{device.device_id}", f"Device status: {device.status}.")
 
 
 @router.post("/devices/{device_id}/regenerate-claim")
@@ -593,7 +615,7 @@ async def contract_create(request: Request, admin=Depends(current_admin), db=Dep
         contract_id=contract.id, start=str(contract.start_date), end=str(contract.end_date),
     )
     db.commit()
-    return redirect("/contracts", "Kontrak dibuat.")
+    return redirect("/contracts", "Contract created.")
 
 
 @router.post("/contracts/{contract_id}")
@@ -609,7 +631,7 @@ async def contract_update(contract_id: int, request: Request, admin=Depends(curr
         contract_id=contract.id, status=contract.status, end=str(contract.end_date),
     )
     db.commit()
-    return redirect("/contracts", "Kontrak disimpan.")
+    return redirect("/contracts", "Contract saved.")
 
 
 # ---------------------------------------------------------------- audit

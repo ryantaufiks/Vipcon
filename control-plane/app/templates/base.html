@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="id">
+<html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -13,17 +13,17 @@
 <header class="topbar no-print">
   <a class="brand" href="/">Vipcon <span>Control</span></a>
   <nav>
-    <a href="/" class="{{ 'on' if request.url.path == '/' }}">Ringkasan</a>
-    <a href="/devices" class="{{ 'on' if request.url.path.startswith('/devices') }}">Device</a>
-    <a href="/clients" class="{{ 'on' if request.url.path.startswith('/clients') }}">Client</a>
-    <a href="/contracts" class="{{ 'on' if request.url.path.startswith('/contracts') }}">Kontrak</a>
-    <a href="/plans" class="{{ 'on' if request.url.path.startswith('/plans') }}">Plan</a>
+    <a href="/" class="{{ 'on' if request.url.path == '/' }}">Overview</a>
+    <a href="/devices" class="{{ 'on' if request.url.path.startswith('/devices') }}">Devices</a>
+    <a href="/clients" class="{{ 'on' if request.url.path.startswith('/clients') }}">Clients</a>
+    <a href="/contracts" class="{{ 'on' if request.url.path.startswith('/contracts') }}">Contracts</a>
+    <a href="/plans" class="{{ 'on' if request.url.path.startswith('/plans') }}">Plans</a>
     <a href="/branding" class="{{ 'on' if request.url.path.startswith('/branding') }}">Branding</a>
     <a href="/audit" class="{{ 'on' if request.url.path.startswith('/audit') }}">Audit</a>
   </nav>
   <div class="who">
     <a href="/account">{{ admin.email }}</a>
-    <form method="post" action="/logout"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="link">Keluar</button></form>
+    <form method="post" action="/logout"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="link">Sign out</button></form>
   </div>
 </header>
 {% endif %}

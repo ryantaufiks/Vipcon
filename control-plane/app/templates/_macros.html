@@ -1,7 +1,7 @@
 {% macro csrf_field() %}<input type="hidden" name="csrf" value="{{ csrf }}">{% endmacro %}
 
 {% macro license_badge(status) -%}
-<span class="badge lic-{{ status }}">{{ {'active':'aktif','suspended':'ditangguhkan','revoked':'dicabut','expired':'kontrak habis','no_contract':'tanpa kontrak'}.get(status, status) }}</span>
+<span class="badge lic-{{ status }}">{{ {'active':'active','suspended':'suspended','revoked':'revoked','expired':'contract ended','no_contract':'no contract'}.get(status, status) }}</span>
 {%- endmacro %}
 
 {% macro status_badge(status) -%}
@@ -16,7 +16,7 @@
 <table>
   <thead><tr>
     <th></th><th>Device</th>{% if show_client %}<th>Client</th>{% endif %}<th>Plan</th><th>Mode</th>
-    <th>Status</th><th>Lisensi</th><th>Terakhir terlihat</th><th>Versi</th><th>Suhu</th><th>Disk</th>
+    <th>Status</th><th>Licence</th><th>Last seen</th><th>Version</th><th>Temp</th><th>Disk</th>
   </tr></thead>
   <tbody>
   {% for r in rows %}{% set d = r.device %}
@@ -34,7 +34,7 @@
       <td>{% if r.hb and r.hb.disk_pct is not none %}<span class="{{ 'warn' if r.hb.disk_pct >= 85 }}">{{ '%.0f'|format(r.hb.disk_pct) }}%</span>{% else %}—{% endif %}</td>
     </tr>
   {% else %}
-    <tr><td colspan="11" class="empty">Belum ada device.</td></tr>
+    <tr><td colspan="11" class="empty">No devices yet.</td></tr>
   {% endfor %}
   </tbody>
 </table>
@@ -44,16 +44,16 @@
 <form method="post" action="/branding/logo" enctype="multipart/form-data" class="logo-form">
   {{ csrf_field() }}
   {% if client_id %}<input type="hidden" name="client_id" value="{{ client_id }}">{% endif %}
-  <label>{{ 'Ganti logo' if logo else 'Unggah logo' }}
+  <label>{{ 'Replace logo' if logo else 'Upload logo' }}
     <input type="file" name="logo" accept="image/png,image/jpeg,image/webp" required>
   </label>
-  <button class="primary" name="action" value="upload">Simpan logo</button>
+  <button class="primary" name="action" value="upload">Save logo</button>
 </form>
 {% if logo %}
-<form method="post" action="/branding/logo" class="inline" data-confirm="Hapus logo ini?">
+<form method="post" action="/branding/logo" class="inline" data-confirm="Remove this logo?">
   {{ csrf_field() }}
   {% if client_id %}<input type="hidden" name="client_id" value="{{ client_id }}">{% endif %}
-  <button class="danger" name="action" value="delete">Hapus logo</button>
+  <button class="danger" name="action" value="delete">Remove logo</button>
 </form>
 {% endif %}
 {% endmacro %}
@@ -61,6 +61,17 @@
 {% macro logo_preview(logo) %}
 {% if logo %}
 <div class="logo-preview"><img src="/branding/logo/{{ logo.id }}.png?v={{ logo.sha256[:12] }}" alt="Logo"></div>
-<p class="muted">{{ logo.width }}×{{ logo.height }} px · diperbarui {{ logo.updated_at|dt }}</p>
+<p class="muted">{{ logo.width }}×{{ logo.height }} px · updated {{ logo.updated_at|dt }}</p>
 {% endif %}
+{% endmacro %}
+
+{% macro tagline_form(tagline, max_len, client_id=None, fallback=None) %}
+<form method="post" action="/branding/tagline" class="logo-form">
+  {{ csrf_field() }}
+  {% if client_id %}<input type="hidden" name="client_id" value="{{ client_id }}">{% endif %}
+  <label>Tagline{% if client_id %} <span class="muted small">(leave empty to use the default{% if fallback %}: "{{ fallback.tagline }}"{% endif %})</span>{% endif %}
+    <input name="tagline" maxlength="{{ max_len }}" value="{{ tagline.tagline if tagline else '' }}" placeholder="Secure Video Conferencing">
+  </label>
+  <button class="primary">Save tagline</button>
+</form>
 {% endmacro %}

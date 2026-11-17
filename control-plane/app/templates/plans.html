@@ -1,12 +1,12 @@
 {% extends "base.html" %}
 {% block content %}
-<div class="head"><h1>Plan</h1><a class="button primary" href="/plans/new">+ Plan baru</a></div>
-<table><thead><tr><th>Nama</th><th>Mode</th><th>Harga / bulan</th><th>Harga / tahun</th><th>Peserta</th><th>User</th><th>Meeting bersamaan</th><th>E2EE default</th><th>Aktif</th></tr></thead><tbody>
+<div class="head"><h1>Plans</h1><a class="button primary" href="/plans/new">+ New plan</a></div>
+<table><thead><tr><th>Name</th><th>Mode</th><th>Price / month</th><th>Price / year</th><th>Participants</th><th>Users</th><th>Concurrent meetings</th><th>E2EE default</th><th>Active</th></tr></thead><tbody>
 {% for p in plans %}<tr>
   <td><a href="/plans/{{ p.id }}">{{ p.name }}</a></td><td>{{ p.connectivity_mode }}</td>
-  <td>Rp {{ p.price_monthly|money }}</td><td>Rp {{ p.price_yearly|money }}</td>
+  <td>{{ CURRENCY }} {{ p.price_monthly|money }}</td><td>{{ CURRENCY }} {{ p.price_yearly|money }}</td>
   <td>{{ p.max_participants }}</td><td>{{ p.max_users }}</td><td>{{ p.max_concurrent_meetings }}</td>
-  <td>{{ 'ya' if (p.features or {}).get('e2ee_default') else 'tidak' }}</td><td>{{ 'ya' if p.active else 'tidak' }}</td>
-</tr>{% else %}<tr><td colspan="9" class="empty">Belum ada plan. Buat dulu, mis. Standard dan Sovereign.</td></tr>{% endfor %}
+  <td>{{ 'yes' if (p.features or {}).get('e2ee_default') else 'no' }}</td><td>{{ 'yes' if p.active else 'no' }}</td>
+</tr>{% else %}<tr><td colspan="9" class="empty">No plans yet. Create some first, e.g. Standard and Sovereign.</td></tr>{% endfor %}
 </tbody></table>
 {% endblock %}
