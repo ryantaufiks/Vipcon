@@ -28,12 +28,12 @@ def new_claim_code():
     return secrets.token_urlsafe(24)
 
 
-def claim_url(device_id, claim_code):
-    return f"https://{device_id}.{ROOT_DOMAIN}/claim?c={claim_code}"
+def claim_url(device, claim_code):
+    return f"https://{device_fqdn(device)}/claim?c={claim_code}"
 
 
-def local_url(device_id):
-    return f"https://{device_id}.local.{ROOT_DOMAIN}"
+def local_url(device):
+    return f"https://{device_fqdn(device)}"
 
 
 def qr_data_uri(text):
@@ -78,14 +78,14 @@ def device_json(device, device_secret, claim_code):
 
 
 def provisioning_bundle(device, device_secret, claim_code):
-    url = claim_url(device.device_id, claim_code)
+    url = claim_url(device, claim_code)
     content = device_json(device, device_secret, claim_code) if device_secret else None
     return {
         "device": device,
         "claim_code": claim_code,
         "claim_url": url,
         "qr": qr_data_uri(url),
-        "local_url": local_url(device.device_id),
+        "local_url": local_url(device),
         "device_json": content,
         "device_json_href": (
             "data:application/json;base64," + base64.b64encode(content.encode()).decode() if content else None
@@ -273,6 +273,7 @@ def tagline_for_device(db, device):
 
 SITE_ID_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{1,28}[a-z0-9])$")
 RESERVED_SITE_IDS = {"www", "api", "app", "admin", "control", "lan", "local", "mail", "status", "vipcon", "test"}
+DEFAULT_LABEL_RE = re.compile(r"^dev-[0-9a-f]+$")  # every device's automatic name, see device_label()
 
 
 def normalize_site_id(raw):
@@ -283,9 +284,25 @@ def normalize_site_id(raw):
     if not SITE_ID_RE.match(value) or "--" in value:
         raise ValueError("Site ID: 3-30 characters, lowercase letters, digits and single hyphens; "
                          "must start and end with a letter or digit.")
-    if value in RESERVED_SITE_IDS:
+    if value in RESERVED_SITE_IDS or DEFAULT_LABEL_RE.match(value):
         raise ValueError(f"Site ID '{value}' is reserved.")
     return value
+
+
+def default_label(device_id):
+    """The automatic name every device gets before (or without) a Site ID: dev_7edad6 -> dev-7edad6.
+
+    Device ids use '_', which is not allowed in host names or certificates."""
+    return re.sub(r"[^a-z0-9-]", "-", (device_id or "").lower()).strip("-")[:63]
+
+
+def device_label(device):
+    return device.site_id or default_label(device.device_id)
+
+
+def device_fqdn(device):
+    """The device's name on the office network, e.g. securistate.lan.<root> or dev-7edad6….lan.<root>."""
+    return site_fqdn(device_label(device))
 
 
 def site_fqdn(site_id):
@@ -303,10 +320,11 @@ def is_private_ipv4(value):
 
 
 def sync_cert_wanted(db):
-    """Tell the certs worker which names need a certificate (devices with a site, not revoked)."""
+    """Tell the certs worker which names need a certificate: every device that has reported in
+    (so its automatic name works for the claim link) and is not revoked."""
     from config import CERTS_WANTED
 
-    names = sorted(site_fqdn(d.site_id) for d in db.query(Device).filter(Device.site_id.isnot(None))
+    names = sorted(device_fqdn(d) for d in db.query(Device).filter(Device.last_seen_at.isnot(None))
                    if d.status != "revoked")
     try:
         os.makedirs(os.path.dirname(CERTS_WANTED), exist_ok=True)
@@ -319,13 +337,13 @@ def sync_cert_wanted(db):
     return names
 
 
-def tls_bundle(site_id):
+def tls_bundle(fqdn):
     """(fullchain_pem, privkey_pem, sha256_of_fullchain, not_after) or None if not issued yet."""
     from config import TLS_DIR
 
-    if not site_id:
+    if not fqdn:
         return None
-    base = os.path.join(TLS_DIR, site_fqdn(site_id))
+    base = os.path.join(TLS_DIR, fqdn)
     try:
         with open(os.path.join(base, "fullchain.pem")) as f:
             chain = f.read()

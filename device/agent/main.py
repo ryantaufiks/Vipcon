@@ -178,10 +178,17 @@ def update_site(info):
     """Office-network name: keep its certificate and Caddy site block in step with the control plane."""
     fqdn = info.get("site_fqdn") or ""
     want_sha = info.get("tls_sha256")
+
+    def publish_name(value):
+        # SITE_FILE is what the device app and the kiosk put in links and QR codes, so it only
+        # names the device once Caddy serves that name with its certificate; until then they
+        # fall back to the LAN IP.
+        if value != read_text(SITE_FILE):
+            write_atomic(SITE_FILE, value.encode())
+
     try:
-        if fqdn != read_text(SITE_FILE):
-            write_atomic(SITE_FILE, fqdn.encode())  # read by the device app and the kiosk for links
         if not fqdn or not want_sha:
+            publish_name("")
             if os.path.exists(CADDY_SITE):  # name removed (or no certificate): stop serving it
                 os.remove(CADDY_SITE)
                 reload_caddy()
@@ -207,8 +214,10 @@ def update_site(info):
         if read_text(CADDY_SITE) != site_block.strip():
             write_atomic(CADDY_SITE, site_block.encode())
             changed = True
-        if changed:
-            reload_caddy()
+        # Also reload when the name isn't published yet: an earlier reload may have failed.
+        if (changed or read_text(SITE_FILE) != fqdn) and not reload_caddy():
+            return  # retried next heartbeat; links keep their previous name meanwhile
+        publish_name(fqdn)
     except (OSError, ValueError, KeyError, requests.RequestException) as e:
         print("site update error", e, flush=True)
 

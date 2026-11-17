@@ -29,7 +29,7 @@
     {{ csrf_field() }}
     <h2>Edit</h2>
     <label>Label <input name="label" value="{{ device.label or '' }}"></label>
-    <label>Site ID <span class="muted small">(office link: https://<b>site-id</b>.lan.{{ ROOT_DOMAIN }})</span>
+    <label>Site ID <span class="muted small">(optional short office link https://<b>site-id</b>.lan.{{ ROOT_DOMAIN }}; without one the device uses its automatic name)</span>
       <input name="site_id" value="{{ device.site_id or '' }}" maxlength="30" pattern="[a-z0-9][a-z0-9-]{1,28}[a-z0-9]" placeholder="e.g. securistate" autocomplete="off" spellcheck="false">
     </label>
     <label>Client

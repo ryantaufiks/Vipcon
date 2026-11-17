@@ -42,7 +42,7 @@ from services import (
     provisioning_bundle,
     set_logo,
     set_tagline,
-    site_fqdn,
+    device_fqdn,
     sync_cert_wanted,
     tls_bundle,
 )
@@ -486,8 +486,8 @@ def device_detail(device_id: str, request: Request, admin=Depends(current_admin)
         license=status,
         contract=contract,
         history=history,
-        site_fqdn=site_fqdn(device.site_id),
-        tls=tls_bundle(device.site_id),
+        site_fqdn=device_fqdn(device),
+        tls=tls_bundle(device_fqdn(device)),
         dns_enabled=cloudflare.enabled(),
         **device_form_context(db),
     )
@@ -512,9 +512,9 @@ async def device_update(device_id: str, request: Request, admin=Depends(current_
     before = {"client_id": device.client_id, "plan_id": device.plan_id, "mode": device.connectivity_mode,
               "site_id": device.site_id}
     if site_id != device.site_id:
-        if device.site_id and cloudflare.enabled():
+        if cloudflare.enabled():  # the old name (a Site ID or the automatic dev-… one) goes away
             try:
-                cloudflare.delete_a(site_fqdn(device.site_id))
+                cloudflare.delete_a(device_fqdn(device))
             except cloudflare.CloudflareError:
                 pass  # a stale record only points at a private IP; it can be removed by hand
         device.site_id, device.dns_ip = site_id, None

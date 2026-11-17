@@ -82,16 +82,21 @@ def current_user(authorization: str = Header(None), db=Depends(get_db)):
 
 
 SITE_FILE = os.environ.get("SITE_FILE", "/etc/appliance/site_fqdn")
+LAN_IP_FILE = os.environ.get("LAN_IP_FILE", "/etc/appliance/lan_ip")
 
 
 def local_base():
-    """Office-network link: the short Site ID name if the control plane assigned one."""
-    try:
-        with open(SITE_FILE) as f:
-            fqdn = f.read().strip()
-    except OSError:
-        fqdn = ""
-    return f"https://{fqdn}" if fqdn else f"https://{DEVICE_ID}.local.{ROOT_DOMAIN}"
+    """Office-network link: the device's name once its certificate is in place (written by the
+    agent), otherwise its LAN IP."""
+    def first_line(path):
+        try:
+            with open(path) as f:
+                return f.read().strip()
+        except OSError:
+            return ""
+
+    host = first_line(SITE_FILE) or first_line(LAN_IP_FILE) or "localhost"
+    return f"https://{host}"
 
 
 def parse_dt(value):
