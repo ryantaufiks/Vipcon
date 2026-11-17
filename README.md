@@ -1,8 +1,8 @@
 # Vipcon — Self-Hosted Video Conference Appliance
 
 A private, **local-first** video conferencing device that runs entirely on a single
-Raspberry Pi 4B. No cloud dependency, no per-seat subscription — your meetings stay
-on your own network.
+low-power **edge SBC** (single-board computer). No cloud dependency, no per-seat
+subscription — your meetings stay on your own network.
 
 Built on [LiveKit](https://livekit.io) (a lightweight Go SFU) with a clean
 **black & white "urban" UI** supporting dark and light themes.
@@ -30,7 +30,7 @@ Built on [LiveKit](https://livekit.io) (a lightweight Go SFU) with a clean
 
 ```
                        ┌──────────────────────────────────────────┐
-                       │        Raspberry Pi 4B (the device)      │
+                       │        Edge SBC (the device)             │
                        │                                          │
    LAN clients ───────▶│  Caddy (HTTPS :443, local CA)            │
    (browsers)          │    ├─ /          → static web UI (React) │
