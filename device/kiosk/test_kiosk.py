@@ -42,6 +42,12 @@ def test_detail_screen_qr_scans(size, claimed):
         assert want in decoded(img)
 
 
+def test_site_name_is_used_for_links():
+    st = dict(BASE, claimed=True, site_fqdn="securistate.lan.xrostr.com")
+    assert kiosk.now_link(st) == "https://securistate.lan.xrostr.com/now"
+    assert kiosk.now_link(dict(BASE, site_fqdn="")) == "https://dev_7edad6a81f89.local.xrostr.com/now"
+
+
 def test_every_screen_renders():
     for extra in ({}, {"claimed": True}, {"claimed": True, "license_status": "expired"},
                   {"device_id": ""}, {"claim_code": ""}):

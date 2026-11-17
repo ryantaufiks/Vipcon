@@ -37,12 +37,34 @@ services:
       LICENSE_TTL_DAYS: ${LICENSE_TTL_DAYS:-14}
       COOKIE_SECURE: ${COOKIE_SECURE:-1}
       DISPLAY_TZ: ${DISPLAY_TZ:-Asia/Jakarta}
+      CURRENCY: ${CURRENCY:-SGD}
+      CF_API_TOKEN: ${CF_API_TOKEN:-}
+      CF_ZONE_ID: ${CF_ZONE_ID:-}
     volumes:
       - appdata:/data
+      - tls:/tls:ro
     ports:
       - "127.0.0.1:${CP_PORT:-8100}:8000"
     mem_limit: 256m
 
+  # Let's Encrypt certificates for devices' office-network names (DNS-01 via Cloudflare).
+  certs:
+    image: certbot/dns-cloudflare:v5.10.0
+    restart: unless-stopped
+    entrypoint: ["python3", "/worker/worker.py"]
+    environment:
+      CF_API_TOKEN: ${CF_API_TOKEN:-}
+      LE_EMAIL: ${LE_EMAIL:-}
+      LE_STAGING: ${LE_STAGING:-1}
+    volumes:
+      - ./certs:/worker:ro
+      - appdata:/data:ro
+      - letsencrypt:/etc/letsencrypt
+      - tls:/tls
+    mem_limit: 128m
+
 volumes:
   dbdata:
   appdata:
+  letsencrypt:
+  tls:

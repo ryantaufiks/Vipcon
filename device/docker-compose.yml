@@ -33,7 +33,8 @@ services:
       - CF_DNS_TOKEN=${CF_DNS_TOKEN:-}
     volumes:
       - /etc/appliance/Caddyfile:/etc/caddy/Caddyfile:ro
-      - /etc/appliance/ca:/etc/appliance/ca:ro
+      # Local CA certs, plus the office-name certificate and its site block (caddy-site.caddy).
+      - /etc/appliance:/etc/appliance:ro
       - /opt/appliance/web:/opt/appliance/web:ro
       - caddydata:/data
     depends_on:

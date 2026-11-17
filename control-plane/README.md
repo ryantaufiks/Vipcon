@@ -19,6 +19,21 @@ Back up the `appdata` volume: it holds `license_ed25519.pem`, the key that signs
 Losing it means re-provisioning every device with a new public key. Do not change `SECRET_KEY`
 once devices exist: it encrypts the stored device secrets.
 
+## Office-network names (Site ID)
+
+Give a device a **Site ID** on its page (e.g. `acme`) and it becomes reachable on the client's
+network at `https://acme.lan.<ROOT_DOMAIN>` with a trusted certificate, no CA to install:
+
+- The app keeps a DNS-only `A` record `acme.lan.<ROOT_DOMAIN>` → the device's LAN IP (from its
+  heartbeat; private IPv4 only) through the Cloudflare API.
+- The `certs` service (certbot + Cloudflare DNS-01) issues and renews a Let's Encrypt
+  certificate for it; the device fetches it from `GET /api/v1/tls` and reloads Caddy.
+
+Needs `CF_API_TOKEN` (Zone → DNS → Edit on the zone only), `CF_ZONE_ID` and `LE_EMAIL` in `.env`.
+Start with `LE_STAGING=1` (untrusted test certificates, no rate limits), then set it to `0`.
+Routers with DNS-rebind protection may refuse names that resolve to private IPs; the device's
+IP address (and the fallback `dev_….local` name) keep working.
+
 ## Superadmin
 
 - Login is email + password + TOTP (mandatory). 5 failures lock the account for 15 minutes.

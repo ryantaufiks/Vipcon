@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import Response
 from sqlalchemy import func
 
+import cloudflare
 from config import COOKIE_SECURE, SESSION_HOURS
 from db import get_db
 from models import (
@@ -37,9 +38,13 @@ from services import (
     get_tagline,
     license_status,
     new_claim_code,
+    normalize_site_id,
     provisioning_bundle,
     set_logo,
     set_tagline,
+    site_fqdn,
+    sync_cert_wanted,
+    tls_bundle,
 )
 from web_common import check_csrf, client_ip, current_admin, redirect, render
 
@@ -481,6 +486,9 @@ def device_detail(device_id: str, request: Request, admin=Depends(current_admin)
         license=status,
         contract=contract,
         history=history,
+        site_fqdn=site_fqdn(device.site_id),
+        tls=tls_bundle(device.site_id),
+        dns_enabled=cloudflare.enabled(),
         **device_form_context(db),
     )
 
@@ -495,14 +503,30 @@ async def device_update(device_id: str, request: Request, admin=Depends(current_
         get_or_404(db, Client, client_id)
     if plan_id:
         get_or_404(db, Plan, plan_id)
-    before = {"client_id": device.client_id, "plan_id": device.plan_id, "mode": device.connectivity_mode}
+    try:
+        site_id = normalize_site_id(form.get("site_id"))
+    except ValueError as e:
+        return redirect(f"/devices/{device.device_id}", str(e))
+    if site_id and db.query(Device).filter(Device.site_id == site_id, Device.id != device.id).first():
+        return redirect(f"/devices/{device.device_id}", f"Site ID '{site_id}' is already used by another device.")
+    before = {"client_id": device.client_id, "plan_id": device.plan_id, "mode": device.connectivity_mode,
+              "site_id": device.site_id}
+    if site_id != device.site_id:
+        if device.site_id and cloudflare.enabled():
+            try:
+                cloudflare.delete_a(site_fqdn(device.site_id))
+            except cloudflare.CloudflareError:
+                pass  # a stale record only points at a private IP; it can be removed by hand
+        device.site_id, device.dns_ip = site_id, None
     device.label = text(form, "label") or None
     device.client_id = client_id
     device.plan_id = plan_id
     device.connectivity_mode = choice(form, "connectivity_mode", CONNECTIVITY_MODES)
-    after = {"client_id": device.client_id, "plan_id": device.plan_id, "mode": device.connectivity_mode}
+    after = {"client_id": device.client_id, "plan_id": device.plan_id, "mode": device.connectivity_mode,
+             "site_id": device.site_id}
     audit(db, admin.email, "device.updated", device.device_id, client_ip(request), before=before, after=after)
     db.commit()
+    sync_cert_wanted(db)
     return redirect(f"/devices/{device.device_id}", "Device saved.")
 
 
@@ -527,6 +551,7 @@ async def device_status(device_id: str, request: Request, admin=Depends(current_
     device.status = target or ("claimed" if device.claimed_at else "provisioned")
     audit(db, admin.email, f"device.{action}", device.device_id, client_ip(request), before=before, after=device.status)
     db.commit()
+    sync_cert_wanted(db)  # a revoked device gets no new certificate
     return redirect(f"/devices/{device.device_id}", f"Device status: {device.status}.")
 
 

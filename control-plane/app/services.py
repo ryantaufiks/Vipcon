@@ -1,7 +1,10 @@
 import base64
 import hashlib
 import io
+import ipaddress
 import json
+import os
+import re
 import secrets
 import uuid
 from datetime import date, datetime, timedelta, timezone
@@ -264,3 +267,76 @@ def set_tagline(db, client_id, text):
 def tagline_for_device(db, device):
     row = (device.client_id and get_tagline(db, device.client_id)) or get_tagline(db, None)
     return row.tagline if row else None
+
+
+# ---------------------------------------------------------------- site id (office-network name)
+
+SITE_ID_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{1,28}[a-z0-9])$")
+RESERVED_SITE_IDS = {"www", "api", "app", "admin", "control", "lan", "local", "mail", "status", "vipcon", "test"}
+
+
+def normalize_site_id(raw):
+    """'' -> None (no site name); otherwise a valid lowercase DNS label or ValueError."""
+    value = (raw or "").strip().lower()
+    if not value:
+        return None
+    if not SITE_ID_RE.match(value) or "--" in value:
+        raise ValueError("Site ID: 3-30 characters, lowercase letters, digits and single hyphens; "
+                         "must start and end with a letter or digit.")
+    if value in RESERVED_SITE_IDS:
+        raise ValueError(f"Site ID '{value}' is reserved.")
+    return value
+
+
+def site_fqdn(site_id):
+    from config import LAN_LABEL
+
+    return f"{site_id}.{LAN_LABEL}.{ROOT_DOMAIN}" if site_id else None
+
+
+def is_private_ipv4(value):
+    try:
+        ip = ipaddress.ip_address(value)
+    except ValueError:
+        return False
+    return ip.version == 4 and ip.is_private and not ip.is_loopback and not ip.is_link_local
+
+
+def sync_cert_wanted(db):
+    """Tell the certs worker which names need a certificate (devices with a site, not revoked)."""
+    from config import CERTS_WANTED
+
+    names = sorted(site_fqdn(d.site_id) for d in db.query(Device).filter(Device.site_id.isnot(None))
+                   if d.status != "revoked")
+    try:
+        os.makedirs(os.path.dirname(CERTS_WANTED), exist_ok=True)
+        tmp = CERTS_WANTED + ".tmp"
+        with open(tmp, "w") as f:
+            f.write("".join(n + "\n" for n in names))
+        os.replace(tmp, CERTS_WANTED)
+    except OSError:
+        pass  # e.g. tests or a read-only checkout; the worker keeps its last list
+    return names
+
+
+def tls_bundle(site_id):
+    """(fullchain_pem, privkey_pem, sha256_of_fullchain, not_after) or None if not issued yet."""
+    from config import TLS_DIR
+
+    if not site_id:
+        return None
+    base = os.path.join(TLS_DIR, site_fqdn(site_id))
+    try:
+        with open(os.path.join(base, "fullchain.pem")) as f:
+            chain = f.read()
+        with open(os.path.join(base, "privkey.pem")) as f:
+            key = f.read()
+    except OSError:
+        return None
+    from cryptography import x509
+
+    try:
+        not_after = x509.load_pem_x509_certificate(chain.encode()).not_valid_after_utc
+    except ValueError:
+        return None
+    return chain, key, hashlib.sha256(chain.encode()).hexdigest(), not_after

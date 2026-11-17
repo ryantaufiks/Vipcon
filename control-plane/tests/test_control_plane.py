@@ -26,6 +26,10 @@ os.environ.update(
     COOKIE_SECURE="0",
     ROOT_DOMAIN="example.test",
     CONTROL_PLANE_URL="http://testserver",
+    TLS_DIR=f"{TMP}/tls",
+    CERTS_WANTED=f"{TMP}/certs/wanted.txt",
+    CF_API_TOKEN="test-token",
+    CF_ZONE_ID="test-zone",
 )
 HERE = os.path.dirname(__file__)
 sys.path.insert(0, os.path.join(HERE, "..", "app"))
@@ -90,6 +94,10 @@ def signed(client, agent, path, payload):
     headers = agent.sign("POST", path, body)
     headers["Content-Type"] = "application/json"
     return client.post(path, content=body, headers=headers)
+
+
+def signed_get(client, agent, path):
+    return client.get(path, headers=agent.sign("GET", path, b""))
 
 
 def test_requires_login(client):
@@ -309,3 +317,119 @@ def test_branding_logo_reaches_the_device(client, admin, tmp_path):
     assert not (tmp_path / "logo.png").exists()
     audit = client.get("/audit").text
     assert "branding.logo_set" in audit and "branding.logo_removed" in audit and "branding.tagline_set" in audit
+
+
+def self_signed(name):
+    from datetime import datetime, timedelta, timezone
+
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.x509.oid import NameOID
+
+    key = ec.generate_private_key(ec.SECP256R1())
+    subject = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, name)])
+    now_ = datetime.now(timezone.utc)
+    cert = (x509.CertificateBuilder().subject_name(subject).issuer_name(subject).public_key(key.public_key())
+            .serial_number(1).not_valid_before(now_).not_valid_after(now_ + timedelta(days=90)).sign(key, hashes.SHA256()))
+    return (cert.public_bytes(serialization.Encoding.PEM).decode(),
+            key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
+                              serialization.NoEncryption()).decode())
+
+
+def test_site_id_dns_and_certificate(client, admin, monkeypatch):
+    import cloudflare
+
+    calls = []
+    monkeypatch.setattr(cloudflare, "upsert_a", lambda name, ip: calls.append(("upsert", name, ip)) or True)
+    monkeypatch.setattr(cloudflare, "delete_a", lambda name: calls.append(("delete", name)))
+
+    r = client.post("/devices", data={"csrf": admin, "label": "Site test"})
+    payload = json.loads(unescape(re.search(r"<pre>(.*?)</pre>", r.text, re.S).group(1)))
+    dev = payload["device_id"]
+    agent = load_agent(dev, payload["device_secret"])
+    update = lambda **f: client.post(f"/devices/{dev}", data={"csrf": admin, "connectivity_mode": "standard", **f},  # noqa: E731
+                                     follow_redirects=False)
+
+    # Invalid and reserved names are refused and nothing changes.
+    for bad in ("Ab", "-acme", "acme-", "a--b", "x" * 31, "www", "acme_1"):
+        update(site_id=bad)
+        assert signed(client, agent, "/api/v1/heartbeat", {}).json()["site_fqdn"] is None, bad
+
+    assert update(site_id="Acme-HQ").status_code == 303  # normalised to lowercase
+    hb = signed(client, agent, "/api/v1/heartbeat", {"lan_ip": "192.168.10.42"}).json()
+    assert hb["site_fqdn"] == "acme-hq.lan.example.test" and hb["tls_sha256"] is None
+    assert calls == [("upsert", "acme-hq.lan.example.test", "192.168.10.42")]
+    assert "acme-hq.lan.example.test" in open(os.environ["CERTS_WANTED"]).read()
+
+    # Same IP again: no DNS call. A public IP is never published.
+    signed(client, agent, "/api/v1/heartbeat", {"lan_ip": "192.168.10.42"})
+    signed(client, agent, "/api/v1/heartbeat", {"lan_ip": "8.8.8.8"})
+    assert len(calls) == 1
+
+    # Another device cannot take the same name.
+    r2 = client.post("/devices", data={"csrf": admin})
+    other = json.loads(unescape(re.search(r"<pre>(.*?)</pre>", r2.text, re.S).group(1)))
+    client.post(f"/devices/{other['device_id']}", data={"csrf": admin, "connectivity_mode": "standard",
+                                                        "site_id": "acme-hq"})
+    other_agent = load_agent(other["device_id"], other["device_secret"])
+    assert signed(client, other_agent, "/api/v1/heartbeat", {}).json()["site_fqdn"] is None
+    agent = load_agent(dev, payload["device_secret"])  # load_agent re-reads env; switch back
+
+    # No certificate yet -> 404; once the worker publishes one, the device gets it.
+    assert signed_get(client, agent, "/api/v1/tls").status_code == 404
+    chain, key = self_signed("acme-hq.lan.example.test")
+    d = os.path.join(os.environ["TLS_DIR"], "acme-hq.lan.example.test")
+    os.makedirs(d, exist_ok=True)
+    open(os.path.join(d, "fullchain.pem"), "w").write(chain)
+    open(os.path.join(d, "privkey.pem"), "w").write(key)
+    hb = signed(client, agent, "/api/v1/heartbeat", {"lan_ip": "192.168.10.42"}).json()
+    assert hb["tls_sha256"]
+    tls = signed_get(client, agent, "/api/v1/tls").json()
+    assert tls["fqdn"] == "acme-hq.lan.example.test" and tls["privkey"] == key and tls["sha256"] == hb["tls_sha256"]
+    assert "valid until" in client.get(f"/devices/{dev}").text
+
+    # The agent installs it and adds the Caddy site block, then reloads Caddy once.
+    etc = os.path.join(TMP, "etc-appliance")
+    os.makedirs(etc, exist_ok=True)
+    agent.TLS_DIR, agent.SITE_FILE = os.path.join(etc, "tls"), os.path.join(etc, "site_fqdn")
+    agent.CADDY_SITE = os.path.join(etc, "caddy-site.caddy")
+    agent.get = lambda path: signed_get(client, agent, path)
+    reloads = []
+    agent.reload_caddy = lambda: reloads.append(1) or True
+    agent.update_site(hb)
+    assert open(agent.SITE_FILE).read() == "acme-hq.lan.example.test"
+    assert open(os.path.join(agent.TLS_DIR, "privkey.pem")).read() == key
+    assert oct(os.stat(os.path.join(agent.TLS_DIR, "privkey.pem")).st_mode & 0o777) == "0o600"
+    assert "acme-hq.lan.example.test {" in open(agent.CADDY_SITE).read() and reloads == [1]
+    agent.update_site(hb)  # nothing changed: no second reload
+    assert reloads == [1]
+    # The real reload forces Caddy to re-read certificate files even if its config is unchanged.
+    sent = {}
+
+    class Resp:
+        status_code, text = 200, ""
+
+    real_reload = load_agent(dev, payload["device_secret"]).reload_caddy
+    real_reload.__globals__["CADDYFILE"] = os.path.join(etc, "Caddyfile")
+    open(os.path.join(etc, "Caddyfile"), "w").write("example")
+    real_reload.__globals__["requests"].post, saved = (lambda url, **kw: sent.update(url=url, **kw) or Resp()), \
+        real_reload.__globals__["requests"].post
+    try:
+        assert real_reload() and sent["headers"]["Cache-Control"] == "must-revalidate"
+        assert sent["url"].endswith("/load") and sent["data"] == b"example"
+    finally:
+        real_reload.__globals__["requests"].post = saved
+
+    # Renaming removes the old DNS record and the old name from the certificate list.
+    update(site_id="acme")
+    assert ("delete", "acme-hq.lan.example.test") in calls
+    wanted = open(os.environ["CERTS_WANTED"]).read()
+    assert "acme.lan.example.test" in wanted and "acme-hq" not in wanted
+    hb = signed(client, agent, "/api/v1/heartbeat", {"lan_ip": "192.168.10.42"}).json()
+    assert hb["site_fqdn"] == "acme.lan.example.test" and hb["tls_sha256"] is None
+    agent.update_site(hb)  # no certificate for the new name yet: stop serving the old block
+    assert not os.path.exists(agent.CADDY_SITE) and open(agent.SITE_FILE).read() == "acme.lan.example.test"
+    # Revoked devices drop off the list.
+    client.post(f"/devices/{dev}/status", data={"csrf": admin, "action": "revoke", "confirm_id": dev})
+    assert "acme.lan.example.test" not in open(os.environ["CERTS_WANTED"]).read()

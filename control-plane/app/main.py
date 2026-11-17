@@ -10,10 +10,13 @@ from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from config import HEARTBEAT_RETENTION_DAYS
+from sqlalchemy import inspect, text
+
 from db import SessionLocal, engine
 from models import Base, Heartbeat, now
 import admin
 import device_api
+from services import sync_cert_wanted
 from web_common import LoginRequired, render
 
 log = logging.getLogger("control-plane")
@@ -40,9 +43,26 @@ async def maintenance_loop():
         await asyncio.sleep(3600)
 
 
+def migrate():
+    """Columns added after the first deploy (create_all only creates missing tables)."""
+    cols = {c["name"] for c in inspect(engine).get_columns("devices")}
+    with engine.begin() as conn:
+        if "site_id" not in cols:
+            conn.execute(text("ALTER TABLE devices ADD COLUMN site_id VARCHAR(40)"))
+            conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ix_devices_site_id ON devices (site_id)"))
+        if "dns_ip" not in cols:
+            conn.execute(text("ALTER TABLE devices ADD COLUMN dns_ip VARCHAR(45)"))
+
+
 @asynccontextmanager
 async def lifespan(app):
     Base.metadata.create_all(engine)
+    migrate()
+    db = SessionLocal()
+    try:
+        sync_cert_wanted(db)
+    finally:
+        db.close()
     task = asyncio.create_task(maintenance_loop())
     yield
     task.cancel()

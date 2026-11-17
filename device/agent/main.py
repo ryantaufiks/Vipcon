@@ -35,6 +35,11 @@ APP_VERSION = os.environ.get("APP_VERSION", "0.1.0")
 LICENSE_FILE = os.environ.get("LICENSE_FILE", f"{ETC}/license.jwt")
 CERT_FILE = os.environ.get("CERT_FILE", f"{ETC}/ca/server.pem")
 KIOSK_DIR = os.environ.get("KIOSK_DIR", f"{ETC}/kiosk")
+TLS_DIR = os.environ.get("TLS_DIR", f"{ETC}/tls")
+SITE_FILE = os.environ.get("SITE_FILE", f"{ETC}/site_fqdn")
+CADDY_SITE = os.environ.get("CADDY_SITE", f"{ETC}/caddy-site.caddy")
+CADDYFILE = os.environ.get("CADDYFILE", f"{ETC}/Caddyfile")
+CADDY_ADMIN = os.environ.get("CADDY_ADMIN", "http://127.0.0.1:2019")
 
 
 def sign(method, path, body):
@@ -124,6 +129,7 @@ def heartbeat():
         return
     if r.status_code == 200:
         update_kiosk(r.json())
+        update_site(r.json())
     elif r.status_code == 403:
         update_kiosk({"license_status": "revoked", "claimed": True, "logo_sha256": None})
 
@@ -142,6 +148,69 @@ def file_sha256(path):
             return hashlib.sha256(f.read()).hexdigest()
     except OSError:
         return None
+
+
+def read_text(path):
+    try:
+        with open(path) as f:
+            return f.read().strip()
+    except OSError:
+        return ""
+
+
+def reload_caddy():
+    """Ask Caddy (host network, admin API on localhost) to reload; it re-reads the cert files."""
+    try:
+        with open(CADDYFILE, "rb") as f:
+            body = f.read()
+        # must-revalidate: reload even when the Caddyfile is unchanged, so renewed certificate
+        # files are picked up (Caddy otherwise skips identical configs and keeps the old cert).
+        r = requests.post(CADDY_ADMIN + "/load", data=body, timeout=20,
+                          headers={"Content-Type": "text/caddyfile", "Cache-Control": "must-revalidate"})
+        print("caddy reload", r.status_code, r.text[:200], flush=True)
+        return r.status_code == 200
+    except (OSError, requests.RequestException) as e:
+        print("caddy reload error", e, flush=True)
+        return False
+
+
+def update_site(info):
+    """Office-network name: keep its certificate and Caddy site block in step with the control plane."""
+    fqdn = info.get("site_fqdn") or ""
+    want_sha = info.get("tls_sha256")
+    try:
+        if fqdn != read_text(SITE_FILE):
+            write_atomic(SITE_FILE, fqdn.encode())  # read by the device app and the kiosk for links
+        if not fqdn or not want_sha:
+            if os.path.exists(CADDY_SITE):  # name removed (or no certificate): stop serving it
+                os.remove(CADDY_SITE)
+                reload_caddy()
+            return
+        chain_path = os.path.join(TLS_DIR, "fullchain.pem")
+        site_block = (f"{fqdn} {{\n\ttls {chain_path} {os.path.join(TLS_DIR, 'privkey.pem')}\n"
+                      f"\timport vipcon_routes\n}}\n")
+        changed = False
+        if file_sha256(chain_path) != want_sha:
+            r = get("/api/v1/tls")
+            if r.status_code != 200:
+                print("tls fetch", r.status_code, flush=True)
+                return
+            tls = r.json()
+            if hashlib.sha256(tls["fullchain"].encode()).hexdigest() != want_sha or tls.get("fqdn") != fqdn:
+                print("tls fetch: mismatch, ignored", flush=True)
+                return
+            os.makedirs(TLS_DIR, mode=0o755, exist_ok=True)
+            write_atomic(os.path.join(TLS_DIR, "privkey.pem"), tls["privkey"].encode(), 0o600)
+            write_atomic(chain_path, tls["fullchain"].encode())
+            print("tls certificate updated for", fqdn, "until", tls.get("not_after"), flush=True)
+            changed = True
+        if read_text(CADDY_SITE) != site_block.strip():
+            write_atomic(CADDY_SITE, site_block.encode())
+            changed = True
+        if changed:
+            reload_caddy()
+    except (OSError, ValueError, KeyError, requests.RequestException) as e:
+        print("site update error", e, flush=True)
 
 
 def update_kiosk(info):
