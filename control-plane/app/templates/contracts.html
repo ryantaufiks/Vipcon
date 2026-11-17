@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="head"><h1>Kontrak</h1><a class="button primary" href="/contracts/new">+ Kontrak baru</a></div>
+<table><thead><tr><th>Client</th><th>Device</th><th>Plan</th><th>Periode</th><th>Status</th><th>Harga</th></tr></thead><tbody>
+{% for c in contracts %}<tr>
+  <td><a href="/clients/{{ c.client.id }}">{{ c.client.name }}</a></td>
+  <td><a class="mono" href="/devices/{{ c.device.device_id }}">{{ c.device.device_id }}</a></td>
+  <td>{{ c.plan.name }}</td>
+  <td><a href="/contracts/{{ c.id }}">{{ c.start_date }} → {{ c.end_date }}</a>{% if c.status == 'active' and c.end_date < today %} <span class="badge lic-expired">lewat</span>{% endif %}</td>
+  <td>{{ c.status }}</td><td>Rp {{ c.price_agreed|money }}</td>
+</tr>{% else %}<tr><td colspan="6" class="empty">Belum ada kontrak.</td></tr>{% endfor %}
+</tbody></table>
+{% endblock %}

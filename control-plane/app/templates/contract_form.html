@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% from "_macros.html" import csrf_field with context %}
+{% block content %}
+<h1>{{ 'Ubah kontrak' if contract else 'Kontrak baru' }}</h1>
+{% set sel_client = (contract.client_id if contract else (preset.client_id|int if preset.client_id else none)) %}
+{% set sel_device = (contract.device_id if contract else (preset.device_id|int if preset.device_id else none)) %}
+<form method="post" action="{{ '/contracts/%d'|format(contract.id) if contract else '/contracts' }}" class="card narrow">
+  {{ csrf_field() }}
+  <label>Client
+    <select name="client_id" required><option value="">— pilih —</option>
+      {% for c in clients %}<option value="{{ c.id }}" {{ 'selected' if c.id == sel_client }}>{{ c.name }}</option>{% endfor %}
+    </select>
+  </label>
+  <label>Device
+    <select name="device_id" required><option value="">— pilih —</option>
+      {% for d in devices %}<option value="{{ d.id }}" {{ 'selected' if d.id == sel_device }}>{{ d.device_id }}{{ ' · ' ~ d.label if d.label }}</option>{% endfor %}
+    </select>
+  </label>
+  <label>Plan
+    <select name="plan_id" required>{% for p in plans %}<option value="{{ p.id }}" {{ 'selected' if contract and p.id == contract.plan_id }}>{{ p.name }}</option>{% endfor %}</select>
+  </label>
+  <div class="row">
+    <label>Mulai <input type="date" name="start_date" value="{{ contract.start_date if contract else '' }}" required></label>
+    <label>Berakhir <input type="date" name="end_date" value="{{ contract.end_date if contract else '' }}" required></label>
+  </div>
+  <label>Harga disepakati (Rp) <input name="price_agreed" inputmode="numeric" value="{{ contract.price_agreed if contract else 0 }}"></label>
+  <label>Status
+    <select name="status">{% for s in statuses %}<option {{ 'selected' if contract and s == contract.status }}>{{ s }}</option>{% endfor %}</select>
+  </label>
+  <p class="muted small">Kontrak aktif menetapkan client dan plan device. Device mendapat lisensi aktif hanya selama ada kontrak aktif yang mencakup hari ini.</p>
+  <button class="primary">Simpan</button>
+</form>
+{% endblock %}

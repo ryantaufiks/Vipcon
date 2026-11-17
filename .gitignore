@@ -22,3 +22,8 @@ plan2.md.orig
 
 # OS
 .DS_Store
+
+# Control plane secrets
+control-plane/.env
+*.pem
+.pytest_cache/

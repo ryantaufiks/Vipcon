@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="no-print">
+  <h1>{{ 'Claim code baru' if regenerated else 'Device dibuat' }}: <span class="mono">{{ device.device_id }}</span></h1>
+  <div class="flash error">
+    {% if regenerated %}
+      QR lama sudah tidak berlaku. Claim code baru ini hanya tampil sekali: cetak labelnya sekarang.
+      {% if was_claimed %}<br>Device ini sebelumnya sudah diklaim. Admin Client baru hanya bisa klaim ulang setelah perangkat di-reset ke pengaturan pabrik.{% endif %}
+    {% else %}
+      Halaman ini hanya tampil sekali. Unduh <code>device.json</code> dan cetak label sekarang. Device secret dan claim code tidak bisa dilihat lagi.
+    {% endif %}
+  </div>
+  {% if device_json %}
+  <div class="card">
+    <h2>1. device.json</h2>
+    <p>Salin ke partisi boot kartu SD: <code>/boot/firmware/device.json</code>. Dibaca sekali oleh <code>first-boot.sh</code> lalu dihapus.</p>
+    <p><a class="button primary" href="{{ device_json_href }}" download="device.json">Unduh device.json</a></p>
+    <details><summary>Lihat isi</summary><pre>{{ device_json }}</pre></details>
+  </div>
+  {% endif %}
+  <div class="card">
+    <h2>{{ '2. ' if device_json }}Label</h2>
+    <p>Klaim URL: <code class="wrap">{{ claim_url }}</code></p>
+    <p><button class="primary" data-print>Cetak label</button> <a class="button" href="/devices/{{ device.device_id }}">Ke halaman device</a></p>
+  </div>
+</div>
+<div class="label">
+  <div class="label-qr"><img src="{{ qr }}" alt="QR klaim"></div>
+  <div class="label-text">
+    <div class="label-brand">VIPCON</div>
+    <div class="mono label-id">{{ device.device_id }}</div>
+    <div class="small">Scan QR untuk aktivasi pertama</div>
+    <div class="small">Alamat lokal:<br><span class="mono">{{ local_url }}</span></div>
+    <div class="small muted">QR v{{ device.qr_version }}</div>
+  </div>
+</div>
+{% endblock %}

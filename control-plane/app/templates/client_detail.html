@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% from "_macros.html" import device_table with context %}
+{% block content %}
+<div class="head"><h1>{{ client.name }}</h1><div><a class="button" href="/clients/{{ client.id }}/edit">Ubah</a> <a class="button primary" href="/contracts/new?client_id={{ client.id }}">+ Kontrak</a></div></div>
+<div class="card">
+  <dl>
+    <dt>Email</dt><dd>{{ client.contact_email or '—' }}</dd>
+    <dt>Telepon</dt><dd>{{ client.contact_phone or '—' }}</dd>
+    <dt>Catatan</dt><dd class="pre">{{ client.notes or '—' }}</dd>
+  </dl>
+</div>
+<h2>Device</h2>
+{{ device_table(rows, show_client=False) }}
+<h2>Kontrak</h2>
+<table><thead><tr><th>Device</th><th>Plan</th><th>Periode</th><th>Status</th><th>Harga</th></tr></thead><tbody>
+{% for c in contracts %}<tr><td class="mono">{{ c.device.device_id }}</td><td>{{ c.plan.name }}</td><td><a href="/contracts/{{ c.id }}">{{ c.start_date }} → {{ c.end_date }}</a></td><td>{{ c.status }}</td><td>Rp {{ c.price_agreed|money }}</td></tr>
+{% else %}<tr><td colspan="5" class="empty">Belum ada kontrak.</td></tr>{% endfor %}
+</tbody></table>
+{% endblock %}

@@ -1,0 +1,48 @@
+# Vipcon control plane. Listens only on localhost; publish it through cloudflared.
+#   cp .env.example .env   # then fill in the secrets
+#   docker compose up -d --build
+#   docker compose exec app python cli.py create-superadmin you@example.com
+name: vipcon-cp
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: vipcon
+      POSTGRES_USER: vipcon
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+    command: ["postgres", "-c", "shared_buffers=64MB", "-c", "max_connections=30", "-c", "work_mem=2MB"]
+    volumes:
+      - dbdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U vipcon -d vipcon"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    mem_limit: 256m
+
+  app:
+    build: ./app
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+psycopg2://vipcon:${POSTGRES_PASSWORD}@db:5432/vipcon
+      SECRET_KEY: ${SECRET_KEY:?set SECRET_KEY in .env}
+      ROOT_DOMAIN: ${ROOT_DOMAIN:?set ROOT_DOMAIN in .env}
+      CONTROL_PLANE_URL: ${CONTROL_PLANE_URL:?set CONTROL_PLANE_URL in .env}
+      LICENSE_KEY_PATH: /data/license_ed25519.pem
+      LICENSE_TTL_DAYS: ${LICENSE_TTL_DAYS:-14}
+      COOKIE_SECURE: ${COOKIE_SECURE:-1}
+      DISPLAY_TZ: ${DISPLAY_TZ:-Asia/Jakarta}
+    volumes:
+      - appdata:/data
+    ports:
+      - "127.0.0.1:${CP_PORT:-8100}:8000"
+    mem_limit: 256m
+
+volumes:
+  dbdata:
+  appdata:

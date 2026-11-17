@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="id">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex">
+  <title>{% block title %}Vipcon Control{% endblock %}</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <script src="/static/app.js" defer></script>
+</head>
+<body>
+{% if admin %}
+<header class="topbar no-print">
+  <a class="brand" href="/">Vipcon <span>Control</span></a>
+  <nav>
+    <a href="/" class="{{ 'on' if request.url.path == '/' }}">Ringkasan</a>
+    <a href="/devices" class="{{ 'on' if request.url.path.startswith('/devices') }}">Device</a>
+    <a href="/clients" class="{{ 'on' if request.url.path.startswith('/clients') }}">Client</a>
+    <a href="/contracts" class="{{ 'on' if request.url.path.startswith('/contracts') }}">Kontrak</a>
+    <a href="/plans" class="{{ 'on' if request.url.path.startswith('/plans') }}">Plan</a>
+    <a href="/audit" class="{{ 'on' if request.url.path.startswith('/audit') }}">Audit</a>
+  </nav>
+  <div class="who">
+    <a href="/account">{{ admin.email }}</a>
+    <form method="post" action="/logout"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="link">Keluar</button></form>
+  </div>
+</header>
+{% endif %}
+<main class="{% block main_class %}page{% endblock %}">
+  {% if flash %}<div class="flash">{{ flash }}</div>{% endif %}
+  {% if error %}<div class="flash error">{{ error }}</div>{% endif %}
+  {% block content %}{% endblock %}
+</main>
+</body>
+</html>

@@ -4,8 +4,6 @@ set -euo pipefail
 BOOT_JSON=/boot/firmware/device.json
 ETC=/etc/appliance
 TPL=/opt/appliance/templates
-ROOT_DOMAIN="${ROOT_DOMAIN:-domainutama.com}"
-CONTROL_PLANE_URL="${CONTROL_PLANE_URL:-https://control.$ROOT_DOMAIN}"
 
 mkdir -p "$ETC"
 
@@ -22,7 +20,16 @@ open(f"{etc}/device_id", "w").write(d["device_id"])
 open(f"{etc}/device_secret", "w").write(d.get("device_secret", ""))
 open(f"{etc}/claim_code", "w").write(d.get("claim_code", ""))
 open(f"{etc}/connectivity_mode", "w").write(d.get("connectivity_mode", "standard"))
+open(f"{etc}/root_domain", "w").write(d.get("root_domain", ""))
+open(f"{etc}/control_plane_url", "w").write(d.get("control_plane_url", ""))
+open(f"{etc}/license_pubkey.pem", "w").write(d.get("license_public_key", ""))
 PY
+
+# Environment overrides win, then device.json, then the defaults.
+ROOT_DOMAIN="${ROOT_DOMAIN:-$(cat "$ETC/root_domain")}"
+ROOT_DOMAIN="${ROOT_DOMAIN:-domainutama.com}"
+CONTROL_PLANE_URL="${CONTROL_PLANE_URL:-$(cat "$ETC/control_plane_url")}"
+CONTROL_PLANE_URL="${CONTROL_PLANE_URL:-https://control.$ROOT_DOMAIN}"
 
 DEVICE_ID=$(cat "$ETC/device_id")
 DEVICE_SECRET=$(cat "$ETC/device_secret")

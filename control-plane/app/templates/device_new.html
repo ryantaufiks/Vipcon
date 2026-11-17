@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% from "_macros.html" import csrf_field with context %}
+{% block content %}
+<h1>Device baru</h1>
+<form method="post" action="/devices" class="card narrow">
+  {{ csrf_field() }}
+  <label>Label (opsional) <input name="label" placeholder="mis. Ruang rapat lt. 12"></label>
+  <label>Client
+    <select name="client_id"><option value="">— Inventaris (belum ada client) —</option>
+      {% for c in clients %}<option value="{{ c.id }}">{{ c.name }}</option>{% endfor %}
+    </select>
+  </label>
+  <label>Plan
+    <select name="plan_id"><option value="">— Belum ditentukan —</option>
+      {% for p in plans %}<option value="{{ p.id }}">{{ p.name }} ({{ p.connectivity_mode }})</option>{% endfor %}
+    </select>
+  </label>
+  <label>Mode konektivitas
+    <select name="connectivity_mode"><option value="">Ikuti plan</option>
+      {% for m in modes %}<option value="{{ m }}">{{ m }}</option>{% endfor %}
+    </select>
+  </label>
+  <p class="muted small">Setelah dibuat, <code>device.json</code>, claim code dan QR hanya ditampilkan sekali. Simpan sebelum meninggalkan halaman.</p>
+  <button class="primary">Buat device</button>
+</form>
+{% endblock %}

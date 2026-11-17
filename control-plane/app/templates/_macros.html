@@ -1,0 +1,41 @@
+{% macro csrf_field() %}<input type="hidden" name="csrf" value="{{ csrf }}">{% endmacro %}
+
+{% macro license_badge(status) -%}
+<span class="badge lic-{{ status }}">{{ {'active':'aktif','suspended':'ditangguhkan','revoked':'dicabut','expired':'kontrak habis','no_contract':'tanpa kontrak'}.get(status, status) }}</span>
+{%- endmacro %}
+
+{% macro status_badge(status) -%}
+<span class="badge st-{{ status }}">{{ status }}</span>
+{%- endmacro %}
+
+{% macro online_dot(online) -%}
+<span class="dot {{ 'on' if online else 'off' }}" title="{{ 'online' if online else 'offline' }}"></span>
+{%- endmacro %}
+
+{% macro device_table(rows, show_client=True) %}
+<table>
+  <thead><tr>
+    <th></th><th>Device</th>{% if show_client %}<th>Client</th>{% endif %}<th>Plan</th><th>Mode</th>
+    <th>Status</th><th>Lisensi</th><th>Terakhir terlihat</th><th>Versi</th><th>Suhu</th><th>Disk</th>
+  </tr></thead>
+  <tbody>
+  {% for r in rows %}{% set d = r.device %}
+    <tr>
+      <td>{{ online_dot(r.online) }}</td>
+      <td><a href="/devices/{{ d.device_id }}" class="mono">{{ d.device_id }}</a>{% if d.label %}<div class="muted">{{ d.label }}</div>{% endif %}</td>
+      {% if show_client %}<td>{% if d.client %}<a href="/clients/{{ d.client.id }}">{{ d.client.name }}</a>{% else %}<span class="muted">—</span>{% endif %}</td>{% endif %}
+      <td>{{ d.plan.name if d.plan else '—' }}</td>
+      <td>{{ d.connectivity_mode }}</td>
+      <td>{{ status_badge(d.status) }}</td>
+      <td>{{ license_badge(r.license) }}</td>
+      <td>{{ d.last_seen_at|dt }}</td>
+      <td>{{ r.hb.app_version if r.hb and r.hb.app_version else '—' }}</td>
+      <td>{% if r.hb and r.hb.cpu_temp is not none %}<span class="{{ 'warn' if r.hb.cpu_temp >= 75 }}">{{ '%.0f'|format(r.hb.cpu_temp) }}°C</span>{% else %}—{% endif %}</td>
+      <td>{% if r.hb and r.hb.disk_pct is not none %}<span class="{{ 'warn' if r.hb.disk_pct >= 85 }}">{{ '%.0f'|format(r.hb.disk_pct) }}%</span>{% else %}—{% endif %}</td>
+    </tr>
+  {% else %}
+    <tr><td colspan="11" class="empty">Belum ada device.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endmacro %}

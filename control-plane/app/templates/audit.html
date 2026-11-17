@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Audit log</h1>
+<p class="muted">300 aksi terakhir.</p>
+<table><thead><tr><th>Waktu</th><th>Pelaku</th><th>Aksi</th><th>Target</th><th>IP</th><th>Detail</th></tr></thead><tbody>
+{% for a in rows %}<tr><td>{{ a.ts|dt }}</td><td>{{ a.actor }}</td><td>{{ a.action }}</td>
+  <td class="mono">{% if a.target and a.target.startswith('dev_') %}<a href="/devices/{{ a.target }}">{{ a.target }}</a>{% else %}{{ a.target }}{% endif %}</td>
+  <td class="mono small">{{ a.ip or '' }}</td><td class="muted small">{{ a.detail or '' }}</td></tr>
+{% else %}<tr><td colspan="6" class="empty">Kosong.</td></tr>{% endfor %}
+</tbody></table>
+{% endblock %}
