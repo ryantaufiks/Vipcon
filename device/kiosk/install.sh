@@ -43,6 +43,9 @@ if [ -f "$CMDLINE" ]; then
     printf '%s\n' "$line" > "$CMDLINE"
 fi
 
+echo "== trim services"
+"$HERE/trim-services.sh"
+
 systemctl daemon-reload
 systemctl enable vipcon-kiosk.service >/dev/null
 if systemctl is-active -q lightdm gdm3 sddm 2>/dev/null || pgrep -x Xorg >/dev/null; then
