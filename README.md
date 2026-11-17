@@ -8,9 +8,6 @@ Every layer — signaling, media, and meeting data — runs entirely on a single
 **edge SBC** inside your own infrastructure. No cloud, no third party, no data outside
 your control.
 
-Built on [LiveKit](https://livekit.io) (a lightweight Go SFU) with a clean
-**black & white "urban" UI** supporting dark and light themes.
-
 ---
 
 ## Why Vipcon
