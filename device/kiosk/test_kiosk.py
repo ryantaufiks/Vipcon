@@ -45,7 +45,10 @@ def test_detail_screen_qr_scans(size, claimed):
 def test_site_name_is_used_for_links():
     st = dict(BASE, claimed=True, site_fqdn="securistate.lan.xrostr.com")
     assert kiosk.now_link(st) == "https://securistate.lan.xrostr.com/now"
-    assert kiosk.now_link(dict(BASE, site_fqdn="")) == "https://dev_7edad6a81f89.local.xrostr.com/now"
+    assert kiosk.now_link(dict(BASE, site_fqdn="")) == "https://192.168.1.23/now"  # no certificate yet
+    assert kiosk.claim_link(dict(BASE, site_fqdn="dev-7edad6a81f89.lan.xrostr.com")) == \
+        "https://dev-7edad6a81f89.lan.xrostr.com/claim?c=nT0kq8yPZ3xV-2bW9LmR4sJc7hFd1aQe"
+    assert kiosk.claim_link(BASE).startswith("https://192.168.1.23/claim?c=")
 
 
 def test_every_screen_renders():

@@ -153,13 +153,15 @@ def load_state():
 
 
 def claim_link(st):
-    return f"https://{st['device_id']}.{st['root_domain']}/claim?c={st['claim_code']}"
+    return f"{local_link(st)}/claim?c={st['claim_code']}"
 
 
 def local_link(st):
-    if st.get("site_fqdn"):  # short office-network name with a trusted certificate
+    """The device's office-network name (a Site ID, or its automatic dev-… name) once the agent
+    has its certificate in place; before that, the LAN IP (works, with a certificate warning)."""
+    if st.get("site_fqdn"):
         return f"https://{st['site_fqdn']}"
-    return f"https://{st['device_id']}.local.{st['root_domain']}"
+    return f"https://{st.get('lan_ip') or 'localhost'}"
 
 
 def now_link(st):

@@ -18,7 +18,8 @@ from services import (
     issue_license,
     license_status,
     logo_for_device,
-    site_fqdn,
+    device_fqdn,
+    sync_cert_wanted,
     tagline_for_device,
     tls_bundle,
 )
@@ -29,11 +30,12 @@ log = logging.getLogger("control-plane.device-api")
 
 
 def publish_lan_dns(device, lan_ip):
-    """Keep <site>.lan.<root> pointing at the device's LAN IP. Best effort: retried next heartbeat."""
-    if not (device.site_id and cloudflare.enabled() and is_private_ipv4(lan_ip)) or device.dns_ip == lan_ip:
+    """Keep the device's name (<site or dev-id>.lan.<root>) pointing at its LAN IP.
+    Best effort: retried next heartbeat."""
+    if not (cloudflare.enabled() and is_private_ipv4(lan_ip)) or device.dns_ip == lan_ip:
         return
     try:
-        cloudflare.upsert_a(site_fqdn(device.site_id), lan_ip)
+        cloudflare.upsert_a(device_fqdn(device), lan_ip)
         device.dns_ip = lan_ip
     except cloudflare.CloudflareError as e:
         log.warning("DNS update for %s failed: %s", device.device_id, e)
@@ -102,12 +104,15 @@ def heartbeat(request: Request, device=Depends(signed_device), db=Depends(get_db
             meetings_count_24h=_int(data.get("meetings_count_24h")),
         )
     )
+    first_contact = device.last_seen_at is None
     device.last_seen_at = now()
     publish_lan_dns(device, str(data.get("lan_ip") or ""))
     status, _ = license_status(db, device)
     logo = logo_for_device(db, device)
-    bundle = tls_bundle(device.site_id)
+    bundle = tls_bundle(device_fqdn(device))
     db.commit()
+    if first_contact:
+        sync_cert_wanted(db)  # a new device needs a certificate for its automatic name
     # Display state for the appliance LCD (see device/kiosk).
     return {
         "ok": True,
@@ -117,7 +122,7 @@ def heartbeat(request: Request, device=Depends(signed_device), db=Depends(get_db
         "logo_sha256": logo.sha256 if logo else None,
         "tagline": tagline_for_device(db, device),
         # Office-network name and its certificate (fetched from /api/v1/tls when the hash changes).
-        "site_fqdn": site_fqdn(device.site_id),
+        "site_fqdn": device_fqdn(device),
         "tls_sha256": bundle[2] if bundle else None,
     }
 
@@ -125,11 +130,11 @@ def heartbeat(request: Request, device=Depends(signed_device), db=Depends(get_db
 @router.get("/tls")
 def tls_certificate(device=Depends(signed_device)):
     """The device's Let's Encrypt certificate and key for its office-network name."""
-    bundle = tls_bundle(device.site_id)
+    bundle = tls_bundle(device_fqdn(device))
     if bundle is None:
         raise HTTPException(404, "no certificate yet")
     chain, key, sha, not_after = bundle
-    return {"fqdn": site_fqdn(device.site_id), "fullchain": chain, "privkey": key,
+    return {"fqdn": device_fqdn(device), "fullchain": chain, "privkey": key,
             "sha256": sha, "not_after": not_after.isoformat()}
 
 

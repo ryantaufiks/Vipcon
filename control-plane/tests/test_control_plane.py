@@ -132,7 +132,8 @@ def test_full_device_lifecycle(client, admin):
     payload = json.loads(unescape(re.search(r"<pre>(.*?)</pre>", r.text, re.S).group(1)))
     device_id, secret, claim_code = payload["device_id"], payload["device_secret"], payload["claim_code"]
     assert payload["license_public_key"] == LICENSE_PUBLIC_PEM
-    assert f"https://{device_id}.example.test/claim?c={claim_code}" in unescape(r.text)
+    auto_name = device_id.replace("_", "-") + ".lan.example.test"  # no '_' in host names
+    assert f"https://{auto_name}/claim?c={claim_code}" in unescape(r.text)
 
     agent = load_agent(device_id, secret)
 
@@ -351,21 +352,32 @@ def test_site_id_dns_and_certificate(client, admin, monkeypatch):
     update = lambda **f: client.post(f"/devices/{dev}", data={"csrf": admin, "connectivity_mode": "standard", **f},  # noqa: E731
                                      follow_redirects=False)
 
-    # Invalid and reserved names are refused and nothing changes.
-    for bad in ("Ab", "-acme", "acme-", "a--b", "x" * 31, "www", "acme_1"):
+    # Before any Site ID the device has its automatic name, and it's in the certificate list.
+    auto = dev.replace("_", "-") + ".lan.example.test"
+    hb = signed(client, agent, "/api/v1/heartbeat", {"lan_ip": "192.168.10.42"}).json()
+    assert hb["site_fqdn"] == auto and hb["tls_sha256"] is None
+    assert calls == [("upsert", auto, "192.168.10.42")]
+    assert auto in open(os.environ["CERTS_WANTED"]).read()
+    calls.clear()
+
+    # Invalid and reserved names (including another device's automatic one) are refused.
+    for bad in ("Ab", "-acme", "acme-", "a--b", "x" * 31, "www", "acme_1", "dev-0123abcd"):
         update(site_id=bad)
-        assert signed(client, agent, "/api/v1/heartbeat", {}).json()["site_fqdn"] is None, bad
+        assert signed(client, agent, "/api/v1/heartbeat", {}).json()["site_fqdn"] == auto, bad
 
     assert update(site_id="Acme-HQ").status_code == 303  # normalised to lowercase
     hb = signed(client, agent, "/api/v1/heartbeat", {"lan_ip": "192.168.10.42"}).json()
     assert hb["site_fqdn"] == "acme-hq.lan.example.test" and hb["tls_sha256"] is None
-    assert calls == [("upsert", "acme-hq.lan.example.test", "192.168.10.42")]
-    assert "acme-hq.lan.example.test" in open(os.environ["CERTS_WANTED"]).read()
+    # The automatic name's record goes, the Site ID's record takes over.
+    assert calls == [("delete", auto), ("upsert", "acme-hq.lan.example.test", "192.168.10.42")]
+    wanted = open(os.environ["CERTS_WANTED"]).read()
+    assert "acme-hq.lan.example.test" in wanted and auto not in wanted
+    calls.clear()
 
     # Same IP again: no DNS call. A public IP is never published.
     signed(client, agent, "/api/v1/heartbeat", {"lan_ip": "192.168.10.42"})
     signed(client, agent, "/api/v1/heartbeat", {"lan_ip": "8.8.8.8"})
-    assert len(calls) == 1
+    assert calls == []
 
     # Another device cannot take the same name.
     r2 = client.post("/devices", data={"csrf": admin})
@@ -373,7 +385,8 @@ def test_site_id_dns_and_certificate(client, admin, monkeypatch):
     client.post(f"/devices/{other['device_id']}", data={"csrf": admin, "connectivity_mode": "standard",
                                                         "site_id": "acme-hq"})
     other_agent = load_agent(other["device_id"], other["device_secret"])
-    assert signed(client, other_agent, "/api/v1/heartbeat", {}).json()["site_fqdn"] is None
+    assert signed(client, other_agent, "/api/v1/heartbeat", {}).json()["site_fqdn"] == \
+        other["device_id"].replace("_", "-") + ".lan.example.test"
     agent = load_agent(dev, payload["device_secret"])  # load_agent re-reads env; switch back
 
     # No certificate yet -> 404; once the worker publishes one, the device gets it.
@@ -429,7 +442,8 @@ def test_site_id_dns_and_certificate(client, admin, monkeypatch):
     hb = signed(client, agent, "/api/v1/heartbeat", {"lan_ip": "192.168.10.42"}).json()
     assert hb["site_fqdn"] == "acme.lan.example.test" and hb["tls_sha256"] is None
     agent.update_site(hb)  # no certificate for the new name yet: stop serving the old block
-    assert not os.path.exists(agent.CADDY_SITE) and open(agent.SITE_FILE).read() == "acme.lan.example.test"
+    # ...and links fall back to the LAN IP until the new name has its certificate.
+    assert not os.path.exists(agent.CADDY_SITE) and open(agent.SITE_FILE).read() == ""
     # Revoked devices drop off the list.
     client.post(f"/devices/{dev}/status", data={"csrf": admin, "action": "revoke", "confirm_id": dev})
     assert "acme.lan.example.test" not in open(os.environ["CERTS_WANTED"]).read()
