@@ -34,7 +34,9 @@ CONTROL_PLANE_URL="${CONTROL_PLANE_URL:-https://control.$ROOT_DOMAIN}"
 DEVICE_ID=$(cat "$ETC/device_id")
 DEVICE_SECRET=$(cat "$ETC/device_secret")
 MODE=$(cat "$ETC/connectivity_mode")
-LAN_IP=$(hostname -I | awk '{print $1}')
+# The address the LAN reaches us on (not docker0 or tailscale0).
+LAN_IP="${LAN_IP:-$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for (i = 1; i < NF; i++) if ($i == "src") print $(i + 1)}')}"
+LAN_IP="${LAN_IP:-$(hostname -I | awk '{print $1}')}"
 HOSTNAME=$(hostname)
 
 LIVEKIT_KEY="lk_$(openssl rand -hex 8)"
@@ -52,17 +54,7 @@ sed -e "s/__LIVEKIT_KEY__/$LIVEKIT_KEY/g" \
 "$TPL/gen-local-ca.sh" "$ETC/ca" "$HOSTNAME" "$LAN_IP" "$DEVICE_ID" "$ROOT_DOMAIN"
 "$TPL/gen-ca-artifacts.sh" "$ETC/ca"
 
-sed -e "s/__DEVICE_ID__/$DEVICE_ID/g" \
-    -e "s/__ROOT_DOMAIN__/$ROOT_DOMAIN/g" \
-    -e "s/__HOSTNAME__/$HOSTNAME/g" \
-    -e "s/__LAN_IP__/$LAN_IP/g" \
-    "$TPL/Caddyfile.local.tpl" > "$ETC/Caddyfile"
-
-sed -e "s/__DEVICE_ID__/$DEVICE_ID/g" \
-    -e "s/__ROOT_DOMAIN__/$ROOT_DOMAIN/g" \
-    -e "s/__HOSTNAME__/$HOSTNAME/g" \
-    -e "s/__LAN_IP__/$LAN_IP/g" \
-    "$TPL/dnsmasq.conf.tpl" > /etc/dnsmasq.conf
+TPL="$TPL" ETC="$ETC" "$TPL/render-config.sh" "$DEVICE_ID" "$ROOT_DOMAIN" "$HOSTNAME" "$LAN_IP"
 
 cat > "$ETC/app.env" <<EOF
 LIVEKIT_URL=ws://127.0.0.1:7880
@@ -82,13 +74,6 @@ DEVICE_SECRET=$DEVICE_SECRET
 MODE=$MODE
 EOF
 chmod 600 "$ETC/app.env" "$ETC/agent.env"
-
-if command -v dnsmasq >/dev/null 2>&1; then
-    systemctl enable --now dnsmasq 2>/dev/null || true
-else
-    apt-get update -qq && apt-get install -y -qq dnsmasq
-    systemctl enable --now dnsmasq 2>/dev/null || true
-fi
 
 cp "$BOOT_JSON" "$ETC/device.json"
 chmod 600 "$ETC/device.json"

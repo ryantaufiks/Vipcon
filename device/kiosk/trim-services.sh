@@ -24,6 +24,12 @@ echo "== desktop leftovers"
 off bluetooth.service packagekit.service accounts-daemon.service udisks2.service \
     wayvnc-control.service wayvnc.service lcd35b-xconfig.service glamor-test.service rp1-test.service
 
+# PackageKit's apt hook calls the (now masked) service after every dpkg run and makes apt fail.
+HOOK=/etc/apt/apt.conf.d/20packagekit
+if [ -e "$HOOK" ] && ! dpkg-divert --list "$HOOK" | grep -q .; then
+    dpkg-divert --quiet --local --rename --divert "$HOOK.disabled" "$HOOK" && echo "  off: packagekit apt hook"
+fi
+
 echo "== cloud-init (first-boot settings from Raspberry Pi Imager are already applied)"
 mkdir -p /etc/cloud && touch /etc/cloud/cloud-init.disabled && echo "  off: cloud-init"
 
