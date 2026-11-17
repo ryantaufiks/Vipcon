@@ -38,6 +38,8 @@ class Meeting(Base):
     e2ee = Column(Boolean, default=False)
     locked = Column(Boolean, default=False)
     max_participants = Column(Integer, default=10)
+    # Listed on the room's "meetings in progress" page (the QR on the device screen).
+    show_on_screen = Column(Boolean, default=True)
     status = Column(String, default="scheduled")
     created_at = Column(DateTime, default=now)
     ended_at = Column(DateTime, nullable=True)

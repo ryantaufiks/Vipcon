@@ -9,11 +9,11 @@ import jwt
 import requests
 from fastapi import Depends, FastAPI, Header, HTTPException, Response
 from pydantic import BaseModel
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import sessionmaker
 
 from models import Base, LobbyRequest, Meeting, OrgSettings, User
-from livekit_admin import mute_participant, remove_participant
+from livekit_admin import list_participants, list_rooms, mute_participant, remove_participant
 from security import (
     create_session_token,
     decode_session_token,
@@ -47,6 +47,15 @@ def get_db():
 @app.on_event("startup")
 def startup():
     Base.metadata.create_all(engine)
+    migrate()
+
+
+def migrate():
+    """Add columns introduced after a device was first provisioned (create_all only adds tables)."""
+    cols = {c["name"] for c in inspect(engine).get_columns("meetings")}
+    if "show_on_screen" not in cols:
+        with engine.begin() as conn:
+            conn.execute(text("ALTER TABLE meetings ADD COLUMN show_on_screen BOOLEAN DEFAULT 1"))
 
 
 def require_admin(user):
@@ -91,6 +100,7 @@ def meeting_out(m):
         "duration_minutes": m.duration_minutes,
         "has_passcode": bool(m.passcode_hash),
         "max_participants": m.max_participants,
+        "show_on_screen": m.show_on_screen is not False,
         "created_at": m.created_at.isoformat() if m.created_at else None,
         "local_url": f"https://{DEVICE_ID}.local.{ROOT_DOMAIN}/m/{m.room_name}",
         "internet_url": f"https://{DEVICE_ID}.{ROOT_DOMAIN}/m/{m.room_name}",
@@ -131,6 +141,7 @@ class MeetingCreate(BaseModel):
     e2ee: bool = False
     max_participants: int = 10
     duration_minutes: int = 60
+    show_on_screen: bool = True
 
 
 class JoinRequest(BaseModel):
@@ -339,6 +350,7 @@ def create_meeting(req: MeetingCreate, user=Depends(current_user), db=Depends(ge
         lobby=req.lobby,
         e2ee=req.e2ee,
         max_participants=req.max_participants,
+        show_on_screen=req.show_on_screen,
         status="scheduled",
     )
     db.add(m)
@@ -450,6 +462,67 @@ def mute_participant_endpoint(meeting_id: int, req: MuteRequest, user=Depends(cu
     except Exception as e:
         raise HTTPException(502, str(e))
     return {"ok": True}
+
+
+def _field(obj, snake, camel):
+    # LiveKit's Twirp JSON may use proto (snake_case) or JSON (camelCase) names; int64 come as strings.
+    value = obj.get(snake, obj.get(camel))
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def live_rooms():
+    """{room_name: (participants, started_unix)} for LiveKit rooms that have people in them."""
+    out = {}
+    for r in list_rooms():
+        name = r.get("name")
+        if not name:
+            continue
+        count = _field(r, "num_participants", "numParticipants")
+        if count == 0:  # the room summary can lag; ask for the participants themselves
+            try:
+                count = len(list_participants(name).get("participants") or [])
+            except Exception:
+                count = 0
+        if count > 0:
+            out[name] = (count, _field(r, "creation_time", "creationTime"))
+    return out
+
+
+@app.get("/api/v1/meetings/now")
+def meetings_now(db=Depends(get_db)):
+    """Meetings in progress right now, for the page behind the QR on the device screen.
+
+    No login: it is only reachable on the office network, lists only meetings their host
+    left visible, and joining still needs the passcode and/or the host's lobby approval.
+    "In progress" means LiveKit has the room open with at least one participant.
+    """
+    try:
+        live = live_rooms()
+    except Exception:
+        raise HTTPException(503, "Meeting server unavailable")
+    if not live:
+        return {"meetings": []}
+    rows = (
+        db.query(Meeting)
+        .filter(Meeting.room_name.in_(list(live)), Meeting.status != "ended", Meeting.show_on_screen.isnot(False))
+        .all()
+    )
+    out = []
+    for m in rows:
+        count, started = live[m.room_name]
+        out.append({
+            "title": m.title,
+            "room_name": m.room_name,
+            "participants": count,
+            "started_at": datetime.fromtimestamp(started, timezone.utc).isoformat() if started else None,
+            "has_passcode": bool(m.passcode_hash),
+            "lobby": bool(m.lobby),
+        })
+    out.sort(key=lambda x: x["started_at"] or "")
+    return {"meetings": out}
 
 
 @app.post("/api/v1/join")

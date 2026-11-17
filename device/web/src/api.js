@@ -107,3 +107,7 @@ export async function claimStatus() {
 export async function claimDevice(data) {
   return api('POST', '/claim', data)
 }
+
+export async function meetingsNow() {
+  return api('GET', '/meetings/now')
+}
