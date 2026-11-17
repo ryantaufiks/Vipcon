@@ -1,0 +1,55 @@
+name: appliance
+
+services:
+  livekit:
+    image: livekit/livekit-server:v1.13.11
+    command: ["--config", "/etc/livekit.yaml"]
+    network_mode: host
+    restart: unless-stopped
+    volumes:
+      - /etc/appliance/livekit.yaml:/etc/livekit.yaml:ro
+
+  app:
+    build: ./app
+    restart: unless-stopped
+    network_mode: host
+    env_file:
+      - /etc/appliance/app.env
+    volumes:
+      - appdata:/data
+      - /etc/appliance:/etc/appliance:ro
+    depends_on:
+      - livekit
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      - DEVICE_ID=${DEVICE_ID:-}
+      - ROOT_DOMAIN=${ROOT_DOMAIN:-domainutama.com}
+      - HOSTNAME=${HOSTNAME:-raspberrypi}
+      - LAN_IP=${LAN_IP:-}
+      - CF_DNS_TOKEN=${CF_DNS_TOKEN:-}
+    volumes:
+      - /etc/appliance/Caddyfile:/etc/caddy/Caddyfile:ro
+      - /etc/appliance/ca:/etc/appliance/ca:ro
+      - /opt/appliance/web:/opt/appliance/web:ro
+      - caddydata:/data
+    depends_on:
+      - app
+
+  agent:
+    build: ./agent
+    restart: unless-stopped
+    network_mode: host
+    env_file:
+      - /etc/appliance/agent.env
+    volumes:
+      - /etc/appliance:/etc/appliance
+    depends_on:
+      - livekit
+
+volumes:
+  appdata:
+  caddydata:

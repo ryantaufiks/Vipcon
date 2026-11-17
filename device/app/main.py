@@ -1,0 +1,507 @@
+import os
+import secrets
+import time
+from datetime import datetime, timedelta, timezone
+
+import jwt
+import requests
+from fastapi import Depends, FastAPI, Header, HTTPException, Response
+from pydantic import BaseModel
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+
+from models import Base, LobbyRequest, Meeting, OrgSettings, User
+from livekit_admin import mute_participant, remove_participant
+from security import (
+    create_session_token,
+    decode_session_token,
+    hash_password,
+    livekit_credentials,
+    verify_password,
+)
+
+DATABASE_URL = os.environ.get("DATABASE_URL", "sqlite:////data/app.db")
+CONTROL_PLANE_URL = os.environ.get("CONTROL_PLANE_URL", "")
+DEVICE_ID = os.environ.get("DEVICE_ID", "")
+ROOT_DOMAIN = os.environ.get("ROOT_DOMAIN", "domainutama.com")
+LIVEKIT_URL = os.environ.get("LIVEKIT_URL", "ws://127.0.0.1:7880")
+MAX_USERS = int(os.environ.get("MAX_USERS", "20"))
+MAX_CONCURRENT_MEETINGS = int(os.environ.get("MAX_CONCURRENT_MEETINGS", "5"))
+
+engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
+SessionLocal = sessionmaker(bind=engine)
+
+app = FastAPI(title="Appliance Dashboard")
+
+
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+
+@app.on_event("startup")
+def startup():
+    Base.metadata.create_all(engine)
+
+
+def require_admin(user):
+    if user.role != "admin":
+        raise HTTPException(403, "admin only")
+
+
+def require_host_or_admin(user, m):
+    if user.role != "admin" and m.host_user_id != user.id:
+        raise HTTPException(403, "host only")
+
+
+def current_user(authorization: str = Header(None), db=Depends(get_db)):
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(401, "missing token")
+    try:
+        payload = decode_session_token(authorization[7:])
+    except Exception:
+        raise HTTPException(401, "invalid token")
+    user = db.query(User).filter_by(id=int(payload["sub"])).first()
+    if not user or not user.active:
+        raise HTTPException(401, "unknown user")
+    return user
+
+
+def parse_dt(value):
+    if not value:
+        return None
+    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+
+def meeting_out(m):
+    return {
+        "id": m.id,
+        "title": m.title,
+        "room_name": m.room_name,
+        "lobby": m.lobby,
+        "e2ee": m.e2ee,
+        "locked": m.locked,
+        "status": m.status,
+        "scheduled_at": m.scheduled_at.isoformat() if m.scheduled_at else None,
+        "duration_minutes": m.duration_minutes,
+        "has_passcode": bool(m.passcode_hash),
+        "max_participants": m.max_participants,
+        "created_at": m.created_at.isoformat() if m.created_at else None,
+        "local_url": f"https://{DEVICE_ID}.local.{ROOT_DOMAIN}/m/{m.room_name}",
+        "internet_url": f"https://{DEVICE_ID}.{ROOT_DOMAIN}/m/{m.room_name}",
+    }
+
+
+class ClaimRequest(BaseModel):
+    device_id: str
+    claim_code: str
+    username: str
+    password: str
+    display_name: str = ""
+
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+
+class UserCreate(BaseModel):
+    username: str
+    password: str
+    display_name: str = ""
+    role: str = "member"
+
+
+class MeetingCreate(BaseModel):
+    title: str
+    scheduled_at: str = None
+    passcode: str = None
+    lobby: bool = True
+    e2ee: bool = False
+    max_participants: int = 10
+    duration_minutes: int = 60
+
+
+class JoinRequest(BaseModel):
+    room: str
+    identity: str
+    passcode: str = None
+
+
+class HostTokenRequest(BaseModel):
+    room: str
+    identity: str
+
+
+class ModerateRequest(BaseModel):
+    identity: str
+
+
+class MuteRequest(BaseModel):
+    identity: str
+    muted: bool = True
+
+
+class SettingsRequest(BaseModel):
+    org_name: str = None
+    logo_path: str = None
+    theme: dict = None
+
+
+@app.get("/healthz")
+def healthz():
+    return {"ok": True}
+
+
+@app.get("/api/v1/ca.pem")
+def ca_pem():
+    return serve_ca_file("ca.pem", "application/x-pem-file", "vipcon-ca.pem")
+
+
+CA_DIR = os.environ.get("CA_DIR", "/etc/appliance/ca")
+
+
+def serve_ca_file(name, media_type, filename):
+    try:
+        with open(f"{CA_DIR}/{name}") as f:
+            content = f.read()
+    except OSError:
+        raise HTTPException(404, "CA not available")
+    return Response(
+        content=content,
+        media_type=media_type,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@app.get("/api/v1/ca.crt")
+def ca_crt():
+    return serve_ca_file("ca.crt", "application/x-x509-ca-cert", "vipcon-ca.crt")
+
+
+@app.get("/api/v1/ca.mobileconfig")
+def ca_mobileconfig():
+    return serve_ca_file("ca.mobileconfig", "application/x-apple-aspen-config", "vipcon-ca.mobileconfig")
+
+
+@app.get("/api/v1/install-ca.sh")
+def install_ca_sh():
+    return serve_ca_file("install-ca.sh", "text/x-shellscript", "install-ca.sh")
+
+
+@app.get("/api/v1/install-ca.bat")
+def install_ca_bat():
+    return serve_ca_file("install-ca.bat", "application/x-msdownload", "install-ca.bat")
+
+
+@app.post("/api/v1/claim")
+def claim(req: ClaimRequest, db=Depends(get_db)):
+    if db.query(User).first() is not None:
+        raise HTTPException(409, "device already claimed")
+    if not CONTROL_PLANE_URL:
+        raise HTTPException(503, "control plane not configured")
+    try:
+        r = requests.post(
+            f"{CONTROL_PLANE_URL}/api/v1/claim/verify",
+            json={"device_id": req.device_id, "claim_code": req.claim_code},
+            timeout=10,
+        )
+    except requests.RequestException:
+        raise HTTPException(502, "control plane unreachable")
+    if r.status_code != 200:
+        raise HTTPException(400, "claim verification failed")
+    user = User(
+        username=req.username,
+        display_name=req.display_name,
+        password_hash=hash_password(req.password),
+        role="admin",
+        active=True,
+    )
+    db.add(user)
+    db.commit()
+    return {"ok": True, "token": create_session_token(user.id)}
+
+
+@app.post("/api/v1/login")
+def login(req: LoginRequest, db=Depends(get_db)):
+    user = db.query(User).filter_by(username=req.username).first()
+    if not user or not user.active:
+        raise HTTPException(401, "invalid credentials")
+    if user.locked_until and user.locked_until > datetime.now(timezone.utc):
+        raise HTTPException(423, "locked")
+    if not verify_password(req.password, user.password_hash):
+        user.failed_attempts += 1
+        if user.failed_attempts >= 5:
+            user.locked_until = datetime.now(timezone.utc) + timedelta(minutes=15)
+            user.failed_attempts = 0
+        db.commit()
+        raise HTTPException(401, "invalid credentials")
+    user.failed_attempts = 0
+    user.last_login = datetime.now(timezone.utc)
+    db.commit()
+    return {"token": create_session_token(user.id), "user": {"id": user.id, "username": user.username, "role": user.role}}
+
+
+@app.get("/api/v1/me")
+def me(user=Depends(current_user)):
+    return {"id": user.id, "username": user.username, "display_name": user.display_name, "role": user.role}
+
+
+@app.get("/api/v1/users")
+def list_users(user=Depends(current_user), db=Depends(get_db)):
+    require_admin(user)
+    return [
+        {"id": u.id, "username": u.username, "display_name": u.display_name, "role": u.role, "active": u.active}
+        for u in db.query(User).all()
+    ]
+
+
+@app.post("/api/v1/users")
+def create_user(req: UserCreate, user=Depends(current_user), db=Depends(get_db)):
+    require_admin(user)
+    if db.query(User).filter_by(username=req.username).first():
+        raise HTTPException(409, "username exists")
+    if db.query(User).count() >= MAX_USERS:
+        raise HTTPException(429, f"user limit reached ({MAX_USERS})")
+    u = User(username=req.username, display_name=req.display_name, password_hash=hash_password(req.password), role=req.role, active=True)
+    db.add(u)
+    db.commit()
+    return {"id": u.id}
+
+
+@app.delete("/api/v1/users/{user_id}")
+def delete_user(user_id: int, user=Depends(current_user), db=Depends(get_db)):
+    require_admin(user)
+    if user_id == user.id:
+        raise HTTPException(400, "cannot delete self")
+    u = db.query(User).filter_by(id=user_id).first()
+    if not u:
+        raise HTTPException(404, "not found")
+    db.delete(u)
+    db.commit()
+    return {"ok": True}
+
+
+@app.post("/api/v1/meetings")
+def create_meeting(req: MeetingCreate, user=Depends(current_user), db=Depends(get_db)):
+    if user.role not in ("admin", "host"):
+        raise HTTPException(403, "host only")
+    active = db.query(Meeting).filter(Meeting.status != "ended").count()
+    if active >= MAX_CONCURRENT_MEETINGS:
+        raise HTTPException(429, f"meeting limit reached ({MAX_CONCURRENT_MEETINGS})")
+    m = Meeting(
+        title=req.title,
+        room_name=secrets.token_urlsafe(12),
+        passcode_hash=hash_password(req.passcode) if req.passcode else None,
+        host_user_id=user.id,
+        scheduled_at=parse_dt(req.scheduled_at),
+        duration_minutes=req.duration_minutes,
+        lobby=req.lobby,
+        e2ee=req.e2ee,
+        max_participants=req.max_participants,
+        status="scheduled",
+    )
+    db.add(m)
+    db.commit()
+    out = meeting_out(m)
+    if req.passcode:
+        out["passcode"] = req.passcode
+    return out
+
+
+@app.get("/api/v1/meetings")
+def list_meetings(user=Depends(current_user), db=Depends(get_db)):
+    return [meeting_out(m) for m in db.query(Meeting).order_by(Meeting.id.desc()).all()]
+
+
+@app.get("/api/v1/meetings/by-room/{room}")
+def get_meeting_by_room(room: str, user=Depends(current_user), db=Depends(get_db)):
+    m = db.query(Meeting).filter_by(room_name=room).first()
+    if not m:
+        raise HTTPException(404, "not found")
+    require_host_or_admin(user, m)
+    return meeting_out(m)
+
+
+@app.delete("/api/v1/meetings/{meeting_id}")
+def delete_meeting(meeting_id: int, user=Depends(current_user), db=Depends(get_db)):
+    require_admin(user)
+    m = db.query(Meeting).filter_by(id=meeting_id).first()
+    if not m:
+        raise HTTPException(404, "not found")
+    db.delete(m)
+    db.commit()
+    return {"ok": True}
+
+
+@app.post("/api/v1/meetings/{meeting_id}/end")
+def end_meeting(meeting_id: int, user=Depends(current_user), db=Depends(get_db)):
+    m = db.query(Meeting).filter_by(id=meeting_id).first()
+    if not m:
+        raise HTTPException(404, "not found")
+    require_host_or_admin(user, m)
+    m.status = "ended"
+    m.ended_at = datetime.now(timezone.utc)
+    db.commit()
+    return {"ok": True}
+
+
+@app.get("/api/v1/meetings/{meeting_id}/lobby")
+def list_lobby(meeting_id: int, user=Depends(current_user), db=Depends(get_db)):
+    m = db.query(Meeting).filter_by(id=meeting_id).first()
+    if not m:
+        raise HTTPException(404, "not found")
+    require_host_or_admin(user, m)
+    reqs = db.query(LobbyRequest).filter_by(room_name=m.room_name).order_by(LobbyRequest.id).all()
+    return [
+        {"id": r.id, "identity": r.identity, "created_at": r.created_at.isoformat() if r.created_at else None}
+        for r in reqs
+    ]
+
+
+@app.post("/api/v1/meetings/{meeting_id}/lobby/{req_id}/admit")
+def admit_lobby(meeting_id: int, req_id: int, user=Depends(current_user), db=Depends(get_db)):
+    m = db.query(Meeting).filter_by(id=meeting_id).first()
+    if not m:
+        raise HTTPException(404, "not found")
+    require_host_or_admin(user, m)
+    lr = db.query(LobbyRequest).filter_by(id=req_id).first()
+    if not lr:
+        raise HTTPException(404, "request not found")
+    lr.status = "admitted"
+    db.commit()
+    return {"ok": True}
+
+
+@app.post("/api/v1/meetings/{meeting_id}/lobby/{req_id}/reject")
+def reject_lobby(meeting_id: int, req_id: int, user=Depends(current_user), db=Depends(get_db)):
+    m = db.query(Meeting).filter_by(id=meeting_id).first()
+    if not m:
+        raise HTTPException(404, "not found")
+    require_host_or_admin(user, m)
+    lr = db.query(LobbyRequest).filter_by(id=req_id).first()
+    if lr:
+        lr.status = "rejected"
+        db.commit()
+    return {"ok": True}
+
+
+@app.post("/api/v1/meetings/{meeting_id}/moderate/kick")
+def kick_participant(meeting_id: int, req: ModerateRequest, user=Depends(current_user), db=Depends(get_db)):
+    m = db.query(Meeting).filter_by(id=meeting_id).first()
+    if not m:
+        raise HTTPException(404, "not found")
+    require_host_or_admin(user, m)
+    try:
+        remove_participant(m.room_name, req.identity)
+    except Exception as e:
+        raise HTTPException(502, str(e))
+    return {"ok": True}
+
+
+@app.post("/api/v1/meetings/{meeting_id}/moderate/mute")
+def mute_participant_endpoint(meeting_id: int, req: MuteRequest, user=Depends(current_user), db=Depends(get_db)):
+    m = db.query(Meeting).filter_by(id=meeting_id).first()
+    if not m:
+        raise HTTPException(404, "not found")
+    require_host_or_admin(user, m)
+    try:
+        mute_participant(m.room_name, req.identity, req.muted)
+    except Exception as e:
+        raise HTTPException(502, str(e))
+    return {"ok": True}
+
+
+@app.post("/api/v1/join")
+def join(req: JoinRequest, db=Depends(get_db)):
+    m = db.query(Meeting).filter_by(room_name=req.room).first()
+    if not m:
+        raise HTTPException(404, "unknown room")
+    if m.locked:
+        raise HTTPException(403, "room locked")
+    if m.passcode_hash and not (req.passcode and verify_password(req.passcode, m.passcode_hash)):
+        raise HTTPException(401, "invalid passcode")
+    if m.lobby:
+        existing = db.query(LobbyRequest).filter_by(room_name=m.room_name, identity=req.identity).first()
+        if not existing:
+            db.add(LobbyRequest(room_name=m.room_name, identity=req.identity))
+            db.commit()
+        return {"status": "waiting"}
+    return issue_livekit_token(req.identity, m.room_name, room_admin=False)
+
+
+@app.get("/api/v1/lobby/status")
+def lobby_status(room: str, identity: str, db=Depends(get_db)):
+    lr = db.query(LobbyRequest).filter_by(room_name=room, identity=identity).first()
+    if not lr:
+        return {"status": "waiting"}
+    if lr.status == "admitted":
+        token = issue_livekit_token(identity, room, room_admin=False)
+        db.delete(lr)
+        db.commit()
+        return token
+    if lr.status == "rejected":
+        db.delete(lr)
+        db.commit()
+        return {"status": "rejected"}
+    return {"status": "waiting"}
+
+
+@app.post("/api/v1/token")
+def host_token(req: HostTokenRequest, user=Depends(current_user), db=Depends(get_db)):
+    m = db.query(Meeting).filter_by(room_name=req.room).first()
+    if not m:
+        raise HTTPException(404, "unknown room")
+    if user.role not in ("admin", "host"):
+        raise HTTPException(403, "host only")
+    return issue_livekit_token(req.identity, m.room_name, room_admin=True)
+
+
+def issue_livekit_token(identity, room, room_admin):
+    key, secret = livekit_credentials()
+    now = int(time.time())
+    payload = {
+        "iss": key,
+        "sub": identity,
+        "nbf": now,
+        "exp": now + 3600,
+        "metadata": '{"room":"%s"}' % room,
+        "video": {
+            "roomJoin": True,
+            "room": room,
+            "canPublish": True,
+            "canSubscribe": True,
+            "canPublishData": True,
+            "roomAdmin": room_admin,
+        },
+    }
+    token = jwt.encode(payload, secret, algorithm="HS256")
+    return {"token": token, "ws_url": LIVEKIT_URL}
+
+
+@app.get("/api/v1/settings")
+def get_settings(user=Depends(current_user), db=Depends(get_db)):
+    s = db.query(OrgSettings).first()
+    if not s:
+        return {"org_name": "", "logo_path": "", "theme": {}}
+    return {"org_name": s.org_name, "logo_path": s.logo_path, "theme": s.theme}
+
+
+@app.post("/api/v1/settings")
+def set_settings(req: SettingsRequest, user=Depends(current_user), db=Depends(get_db)):
+    require_admin(user)
+    s = db.query(OrgSettings).first()
+    if not s:
+        s = OrgSettings()
+        db.add(s)
+    if req.org_name is not None:
+        s.org_name = req.org_name
+    if req.logo_path is not None:
+        s.logo_path = req.logo_path
+    if req.theme is not None:
+        s.theme = req.theme
+    db.commit()
+    return {"ok": True}

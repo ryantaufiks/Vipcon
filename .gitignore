@@ -1,0 +1,24 @@
+# Node
+node_modules/
+dist/
+
+# Python
+__pycache__/
+*.pyc
+
+# Databases
+*.db
+*.sqlite3
+
+# Generated certificates (device-specific, regenerated at first boot)
+ca.pem
+ca.crt
+
+# Dev-only config with local credentials
+device/livekit/livekit.yaml
+
+# Backup artifacts
+plan2.md.orig
+
+# OS
+.DS_Store
