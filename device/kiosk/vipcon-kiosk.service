@@ -16,6 +16,8 @@ ProtectSystem=strict
 ProtectHome=yes
 PrivateTmp=yes
 ReadOnlyPaths=/etc/appliance /opt/appliance
+# Where the boot splash frame is cached (/var/cache/vipcon-kiosk).
+CacheDirectory=vipcon-kiosk
 ProtectKernelTunables=yes
 ProtectKernelModules=yes
 ProtectControlGroups=yes

@@ -48,4 +48,15 @@ def test_every_screen_renders():
         r = kiosk.Renderer(480, 320)
         r.set_state(dict(BASE, **extra))
         assert r.screensaver(0.3).size == (480, 320)
+        assert r.splash("Starting…").size == (480, 320)
         assert r.detail(10).size == (480, 320)
+
+
+def test_splash_cache_matches_framebuffer_size(tmp_path, monkeypatch):
+    monkeypatch.setattr(kiosk, "SPLASH_FILE", str(tmp_path / "splash.raw"))
+    fb = object.__new__(kiosk.Framebuffer)
+    fb.width, fb.height, fb.bpp, fb.stride = 480, 320, 16, 960
+    r = kiosk.Renderer(480, 320)
+    r.set_state(dict(BASE, claimed=True))
+    kiosk.save_splash(fb, r)
+    assert (tmp_path / "splash.raw").stat().st_size == fb.stride * fb.height  # what splash.sh checks

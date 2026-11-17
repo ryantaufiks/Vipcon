@@ -13,6 +13,9 @@ apt-get install -y -qq python3-pil python3-numpy python3-qrcode python3-evdev fo
 echo "== kiosk files"
 install -d -m 755 /opt/appliance/kiosk /etc/appliance/kiosk
 install -m 644 "$HERE/kiosk.py" /opt/appliance/kiosk/kiosk.py
+install -m 755 "$HERE/splash.sh" /opt/appliance/kiosk/splash.sh
+install -m 644 "$HERE/90-vipcon-splash.rules" /etc/udev/rules.d/90-vipcon-splash.rules
+udevadm control --reload-rules 2>/dev/null || true
 install -m 644 "$HERE/vipcon-kiosk.service" /etc/systemd/system/vipcon-kiosk.service
 
 echo "== console lockdown"
@@ -37,10 +40,21 @@ CMDLINE=/boot/firmware/cmdline.txt
 if [ -f "$CMDLINE" ]; then
     cp -n "$CMDLINE" "$CMDLINE.vipcon-orig"
     line=$(head -n1 "$CMDLINE")
-    for opt in quiet loglevel=3 logo.nologo vt.global_cursor_default=0 consoleblank=0; do
+    # No Raspberry Pi splash (Plymouth) and no text console on the LCD: the only thing the panel
+    # ever shows is the Vipcon splash (udev, see splash.sh) and then the kiosk.
+    line=$(printf '%s\n' "$line" | sed -E 's/(^| )splash( |$)/ /g; s/  +/ /g; s/ $//')
+    for opt in quiet loglevel=3 logo.nologo vt.global_cursor_default=0 consoleblank=0 plymouth.enable=0 fbcon=map:9; do
         case " $line " in *" ${opt%%=*}="*|*" $opt "*) ;; *) line="$line $opt" ;; esac
     done
     printf '%s\n' "$line" > "$CMDLINE"
+fi
+# Belt and braces: even if the cmdline is reset, Plymouth never draws a splash again.
+for unit in plymouth-start plymouth-reboot plymouth-poweroff plymouth-halt plymouth-kexec plymouth-switch-root; do
+    systemctl mask "$unit.service" >/dev/null 2>&1 || true
+done
+CONFIG="$(dirname "$CMDLINE")/config.txt"
+if [ -f "$CONFIG" ] && ! grep -q '^disable_splash=1' "$CONFIG"; then
+    sed -i '1i disable_splash=1' "$CONFIG"   # no rainbow square on HDMI either
 fi
 
 echo "== trim services"

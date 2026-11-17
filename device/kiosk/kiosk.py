@@ -25,6 +25,7 @@ import math
 import os
 import random
 import select
+import signal
 import socket
 import sys
 import time
@@ -43,6 +44,9 @@ IDLE_TIMEOUT = int(os.environ.get("KIOSK_IDLE_TIMEOUT", "60"))
 FPS = float(os.environ.get("KIOSK_FPS", "6"))
 PULSE_FRAMES = 24  # one breath = PULSE_FRAMES / FPS seconds
 STATE_POLL = 5
+# Ready-to-blit splash frame, shown by a udev rule the moment the LCD driver registers
+# /dev/fb0 on the next boot (see splash.sh), long before Python could start.
+SPLASH_FILE = os.environ.get("KIOSK_SPLASH_FILE", "/var/cache/vipcon-kiosk/splash.raw")
 FULL_REPAINT = 3  # seconds
 
 BG = (6, 8, 12)
@@ -464,6 +468,30 @@ class Renderer:
             self.cache["saver"] = (base, fingerprint(fp_size, color), color, ((w - fp_size) // 2, fp_y), fp_size)
         return self.cache["saver"]
 
+    def splash(self, status):
+        """Boot / restart screen: mesh, logo and tagline centred, a short status line."""
+        w, h = self.w, self.h
+        u = min(w, h)
+        inactive = self.state["claimed"] and self.state["license_status"] in INACTIVE
+        img = Image.new("RGB", (w, h), BG)
+        mesh = network_backdrop(w, h, mix(WARN if inactive else ACCENT, 0.6))
+        img.paste(mesh, (0, 0), mesh)
+        d = ImageDraw.Draw(img)
+        logo = load_logo(self.state["logo_path"], int(w * 0.66), int(h * (0.24 if self.landscape else 0.18)))
+        tagline = self.state.get("tagline") or ""
+        tag_font = font(max(10, int(u * 0.045)))
+        tag_gap = int(u * 0.04)
+        block = logo.height + (tag_gap + tag_font.size if tagline else 0)
+        top = (h - block) // 2 - int(h * 0.03)
+        img.paste(logo, ((w - logo.width) // 2, top), logo)
+        if tagline:
+            spaced_text(d, w / 2, top + logo.height + tag_gap, tagline.upper(), tag_font, mix(FG, 0.75),
+                        tracking=max(1, int(u * 0.008)), max_width=w * 0.9)
+        sf = font(max(9, int(u * 0.04)))
+        sb = d.textbbox((0, 0), status, font=sf)
+        text_center(d, w / 2, h - int(h * 0.09) - sb[3], status, sf, mix(MUTED, 0.8))
+        return img
+
     def saver_band(self):
         """Rows of the screen that change between screensaver frames."""
         _, _, _, (x, y), size = self._saver_layout()
@@ -682,6 +710,19 @@ class Touch:
             return False
 
 
+def save_splash(fb, renderer):
+    """Cache the encoded splash so the next boot can show it before anything else runs."""
+    try:
+        data = fb.encode(renderer.splash("Starting…"))
+        os.makedirs(os.path.dirname(SPLASH_FILE), exist_ok=True)
+        tmp = SPLASH_FILE + ".tmp"
+        with open(tmp, "wb") as f:
+            f.write(data)
+        os.replace(tmp, SPLASH_FILE)
+    except OSError as e:
+        print(f"kiosk: could not save splash: {e}", flush=True)
+
+
 def take_console(enable):
     """Stop the text console from drawing over the panel while the kiosk runs."""
     try:
@@ -705,8 +746,15 @@ def run():
     renderer = Renderer(fb.width, fb.height)
     take_console(True)
 
+    # systemd stops us with SIGTERM on reboot/shutdown: leave the branded screen up, not a console.
+    def on_term(signum, frame):
+        raise SystemExit(0)
+
+    signal.signal(signal.SIGTERM, on_term)
+
     mode, mode_since, last_poll = "saver", time.time(), 0
     frames, frames_key, band = [], None, (0, fb.height)
+    splash_key = None
     detail_shown = None
     i = 0
     try:
@@ -717,6 +765,9 @@ def run():
             if mode == "saver":
                 key = renderer.cache.get("key")
                 if key != frames_key:
+                    if key != splash_key:
+                        save_splash(fb, renderer)
+                        splash_key = key
                     frames = [fb.encode(renderer.screensaver(n / PULSE_FRAMES)) for n in range(PULSE_FRAMES)]
                     frames_key, band = key, renderer.saver_band()
                     fb.show(frames[0])  # full repaint once, then only the animated band
@@ -739,6 +790,11 @@ def run():
                 if remaining == 0 or touch.wait(0.5):
                     mode, frames_key = "saver", None
     finally:
+        if renderer.state is not None:
+            try:
+                fb.show(fb.encode(renderer.splash("Please wait…")))
+            except Exception:
+                pass
         take_console(False)
 
 
@@ -759,7 +815,7 @@ def preview(out_dir, width, height):
     for name, extra in cases.items():
         r = Renderer(width, height)
         r.set_state(dict(base, **extra))
-        imgs = [r.screensaver(0.5)] if name == "saver" else [r.detail(42)]
+        imgs = [r.screensaver(0.5), r.splash("Starting…")] if name == "saver" else [r.detail(42)]
         if name == "inactive":
             imgs.insert(0, r.screensaver(0.5))
         for n, img in enumerate(imgs):

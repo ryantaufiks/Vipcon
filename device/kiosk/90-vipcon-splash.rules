@@ -1,0 +1,2 @@
+# Show the Vipcon splash as soon as the SPI LCD (fbtft) registers its framebuffer.
+ACTION=="add", SUBSYSTEM=="graphics", KERNEL=="fb[0-9]*", ATTR{name}=="fb_ili9486", RUN+="/opt/appliance/kiosk/splash.sh %k"
