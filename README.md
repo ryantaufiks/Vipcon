@@ -101,6 +101,11 @@ docs/            Documentation + screenshots
 image-builder/   Golden image build
 ```
 
+## Installing a device
+
+To register a new appliance, install it on a Raspberry Pi and hand it to a client ready to be
+claimed, follow [docs/device-onboarding.md](docs/device-onboarding.md).
+
 ## Quick start (development)
 
 ```bash
