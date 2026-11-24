@@ -41,6 +41,8 @@ function useTileLayout(n) {
   return { ref, cols: best.cols, w: Math.floor(Math.max(0, best.w)) }
 }
 
+// Desktop and laptop browsers can share their screen; phone and tablet browsers (no getDisplayMedia)
+// cannot, so the button only appears where it works. Everyone in the meeting may share.
 const canShareScreen = !!navigator.mediaDevices?.getDisplayMedia
 
 export default function Room({ session, onLeave }) {
@@ -332,7 +334,7 @@ export default function Room({ session, onLeave }) {
             <Camera off={!camOn} size={20} />
           </button>
           {canShareScreen && (
-            <button type="button" className={`cbtn hide-md ${screenOn ? 'on' : ''}`} onClick={() => toggle('screen')}
+            <button type="button" className={`cbtn ${screenOn ? 'on' : ''}`} onClick={() => toggle('screen')}
                     aria-pressed={screenOn} title={screenOn ? 'Stop sharing' : 'Share screen'}>
               <Screen size={20} /><span className="cbtn-label">{screenOn ? 'Stop sharing' : 'Share'}</span>
             </button>

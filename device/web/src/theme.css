@@ -465,7 +465,7 @@ h1, h2, h3 { letter-spacing: -.015em; line-height: 1.25; }
 .tile-btn { width: 32px; height: 32px; border-radius: 8px; display: grid; place-items: center; background: rgba(0, 0, 0, .55); color: #fff; }
 .tile-btn:hover { background: rgba(0, 0, 0, .75); }
 
-.controls { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 18px 18px; }
+.controls { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 18px max(18px, env(safe-area-inset-bottom)); }
 .controls-side { flex: 1; display: flex; align-items: center; gap: 8px; min-width: 0; }
 .controls-side.right { justify-content: flex-end; }
 .controls-center { display: flex; align-items: center; gap: 10px; }
@@ -518,7 +518,7 @@ h1, h2, h3 { letter-spacing: -.015em; line-height: 1.25; }
 @media (max-width: 900px) {
   .side-panel { position: fixed; z-index: 40; inset: auto 0 0 0; width: auto; height: 70dvh; border-radius: var(--r-lg) var(--r-lg) 0 0; box-shadow: var(--shadow-lg); }
   .cbtn-label, .hide-md { display: none; }
-  .controls { padding: 10px 10px 14px; }
+  .controls { justify-content: center; padding: 10px 10px max(14px, env(safe-area-inset-bottom)); }
   .controls-side { flex: 0; }
   .controls-center { gap: 8px; }
   .cbtn { min-width: 46px; height: 46px; padding: 0 12px; }
