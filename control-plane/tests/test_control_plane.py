@@ -452,7 +452,7 @@ def test_site_id_dns_and_certificate(client, admin, monkeypatch):
 def test_public_site_and_console_are_separate(client):
     site = {"host": "example.test"}
     r = client.get("/", headers=site)
-    assert r.status_code == 200 and "Private Edge" in r.text and "Conferencing" in r.text
+    assert r.status_code == 200 and "never leave the room" in r.text and "Request a demo" in r.text
     assert r.headers["cache-control"].startswith("public") and "frame-ancestors 'none'" in r.headers["content-security-policy"]
     assert client.get("/", headers={"host": "www.example.test"}).status_code == 200
     # Nothing of the console is reachable on the public site...
@@ -466,4 +466,4 @@ def test_public_site_and_console_are_separate(client):
     # The console host is never indexed and still shows the console.
     assert "Disallow: /" in client.get("/robots.txt").text
     console = client.get("/", follow_redirects=False)
-    assert console.status_code in (200, 303) and "Private Edge" not in console.text
+    assert console.status_code in (200, 303) and "never leave the room" not in console.text
