@@ -377,7 +377,7 @@ const LEFT = {
   lost: { icon: <Wifi size={26} />, tone: 'danger', title: 'Connection lost', text: 'Your connection to the meeting dropped. Check your network and rejoin.' },
 }
 
-export function Left({ info, isHost, onRejoin }) {
+export function Left({ info, signedIn, onRejoin }) {
   const s = LEFT[info.reason] || LEFT.left
   const canRejoin = ['left', 'lost', 'duplicate'].includes(info.reason)
   return (
@@ -388,7 +388,7 @@ export function Left({ info, isHost, onRejoin }) {
         <p className="muted">{s.text}</p>
         <div className="state-actions">
           {canRejoin && <Button variant="primary" icon={<Refresh size={16} />} onClick={onRejoin}>Rejoin</Button>}
-          {isHost && <Button icon={<ArrowLeft size={16} />} onClick={() => { window.location.href = '/admin' }}>Back to meetings</Button>}
+          {signedIn && <Button icon={<ArrowLeft size={16} />} onClick={() => { window.location.href = '/admin' }}>Back to meetings</Button>}
         </div>
       </div>
     </PublicLayout>

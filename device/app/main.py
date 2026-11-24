@@ -67,7 +67,7 @@ def require_admin(user):
 
 
 def require_host_or_admin(user, m):
-    if user.role != "admin" and m.host_user_id != user.id:
+    if not can_moderate(user, m):
         raise HTTPException(403, "host only")
 
 
@@ -417,9 +417,18 @@ def create_meeting(req: MeetingCreate, user=Depends(current_user), db=Depends(ge
     return out
 
 
+def can_moderate(user, m):
+    """The Client Admin moderates every meeting; a host only the meetings they created."""
+    return user.role == "admin" or (user.role == "host" and m.host_user_id == user.id)
+
+
 @app.get("/api/v1/meetings")
 def list_meetings(user=Depends(current_user), db=Depends(get_db)):
-    return [meeting_out(m) for m in db.query(Meeting).order_by(Meeting.id.desc()).all()]
+    names = {u.id: u.display_name or u.username for u in db.query(User).all()}
+    return [
+        {**meeting_out(m), "can_host": can_moderate(user, m), "host_name": names.get(m.host_user_id, "")}
+        for m in db.query(Meeting).order_by(Meeting.id.desc()).all()
+    ]
 
 
 @app.get("/api/v1/meetings/by-room/{room}")
@@ -675,13 +684,20 @@ def lobby_status(room: str, identity: str, db=Depends(get_db)):
 
 
 @app.post("/api/v1/token")
-def host_token(req: HostTokenRequest, user=Depends(current_user), db=Depends(get_db)):
+def signed_in_token(req: HostTokenRequest, user=Depends(current_user), db=Depends(get_db)):
+    """Joining from the console. The meeting's host (or the Client Admin) joins as moderator; any
+    other signed-in account (staff) joins straight in, without passcode or waiting room, but
+    cannot moderate."""
     m = db.query(Meeting).filter_by(room_name=req.room).first()
     if not m:
         raise HTTPException(404, "unknown room")
-    if user.role not in ("admin", "host"):
-        raise HTTPException(403, "host only")
-    return issue_livekit_token(req.identity, m.room_name, room_admin=True)
+    if m.status == "ended":
+        raise HTTPException(410, "This meeting has ended.")
+    moderator = can_moderate(user, m)
+    if m.locked and not moderator:
+        raise HTTPException(403, "room locked")
+    identity = req.identity.strip()[:60] or user.display_name or user.username
+    return {**issue_livekit_token(identity, m.room_name, room_admin=moderator), "host": moderator}
 
 
 def issue_livekit_token(identity, room, room_admin):

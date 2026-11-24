@@ -5,6 +5,7 @@ import Dashboard from './Dashboard.jsx'
 import Claim from './Claim.jsx'
 import Now from './Now.jsx'
 import { Spinner } from './ui.jsx'
+import { getToken } from './api.js'
 
 // The meeting room (and LiveKit with it) loads only when someone joins.
 const Room = lazy(() => import('./Room.jsx'))
@@ -19,7 +20,7 @@ function parseRoom() {
   return m ? decodeURIComponent(m[1]) : null
 }
 
-function Meeting({ room, isHost }) {
+function Meeting({ room, signedIn, asHost }) {
   // prejoin -> room -> left (and back to the room on "Rejoin")
   const [session, setSession] = useState(null)
   const [left, setLeft] = useState(null)
@@ -27,12 +28,12 @@ function Meeting({ room, isHost }) {
   if (left) {
     return (
       <Suspense fallback={<Loading />}>
-        <Left info={left} isHost={isHost} onRejoin={() => { setLeft(null); setSession(left.session) }} />
+        <Left info={left} signedIn={signedIn} onRejoin={() => { setLeft(null); setSession(left.session) }} />
       </Suspense>
     )
   }
   if (!session) {
-    return <PreJoin room={room} isHost={isHost} onJoined={setSession} />
+    return <PreJoin room={room} signedIn={signedIn} asHost={asHost} onJoined={setSession} />
   }
   return (
     <Suspense fallback={<Loading />}>
@@ -51,6 +52,9 @@ export default function App() {
   if (path === '/admin' || path.startsWith('/admin/')) return <Dashboard />
   const room = parseRoom()
   if (!room) return <Onboarding />
-  const isHost = new URLSearchParams(window.location.search).get('host') === '1'
-  return <Meeting room={room} isHost={isHost} />
+  // From the console: ?host=1 (your own meeting) or ?staff=1 (anyone else's); otherwise a guest.
+  const q = new URLSearchParams(window.location.search)
+  const asHost = q.get('host') === '1'
+  const signedIn = (asHost || q.get('staff') === '1') && !!getToken()
+  return <Meeting room={room} signedIn={signedIn} asHost={asHost} />
 }

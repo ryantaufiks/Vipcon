@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { joinRoom, hostToken, lobbyStatus, getToken, getUsername, meetingInfo } from './api.js'
+import { joinRoom, hostToken, lobbyStatus, getToken, getUsername, meetingInfo, me } from './api.js'
 import { PublicLayout, Button, TextInput, PasswordInput, Field, Notice, Avatar, Spinner } from './ui.jsx'
 import { Mic, Camera, Lock, Shield, Clock, Alert, ArrowLeft } from './icons.jsx'
 import { when, duration, friendly } from './format.js'
@@ -141,9 +141,10 @@ function Preview({ media, name }) {
   )
 }
 
-export default function PreJoin({ room, isHost, onJoined }) {
+// signedIn: opened from the console (the account joins directly); asHost: it is your own meeting.
+export default function PreJoin({ room, signedIn, asHost, onJoined }) {
   const [info, setInfo] = useState(null) // null loading, {error} when the link is invalid
-  const [name, setName] = useState(() => (isHost ? getUsername() : localStorage.getItem(NAME_KEY) || ''))
+  const [name, setName] = useState(() => (signedIn ? getUsername() : localStorage.getItem(NAME_KEY) || ''))
   const [passcode, setPasscode] = useState('')
   const [busy, setBusy] = useState(false)
   const [waiting, setWaiting] = useState(false)
@@ -152,17 +153,21 @@ export default function PreJoin({ room, isHost, onJoined }) {
   const media = useMediaPreview()
 
   useEffect(() => {
+    if (signedIn) me(getToken()).then((u) => { if (u.display_name) setName((n) => (n === getUsername() ? u.display_name : n)) }).catch(() => {})
+  }, [signedIn])
+
+  useEffect(() => {
     meetingInfo(room).then(setInfo).catch((err) => setInfo({ error: err.status === 404 ? 'gone' : friendly(err) }))
   }, [room])
 
   const enter = useCallback((data) => {
     media.stop()
     onJoined({
-      room, identity: name.trim(), token: data.token, wsUrl: data.ws_url, isHost,
+      room, identity: name.trim(), token: data.token, wsUrl: data.ws_url, isHost: !!data.host, signedIn,
       title: info?.title || '', micOn: media.micOn, camOn: media.camOn,
       audioId: media.audioId, videoId: media.videoId, joinedAt: Date.now(),
     })
-  }, [media, onJoined, room, name, isHost, info])
+  }, [media, onJoined, room, name, signedIn, info])
 
   async function submit(e) {
     e.preventDefault()
@@ -173,10 +178,10 @@ export default function PreJoin({ room, isHost, onJoined }) {
     }
     setNameError('')
     setError('')
-    if (!isHost) localStorage.setItem(NAME_KEY, n)
+    if (!signedIn) localStorage.setItem(NAME_KEY, n)
     setBusy(true)
     try {
-      if (isHost) {
+      if (signedIn) {
         enter(await hostToken(room, n, getToken()))
       } else {
         const data = await joinRoom(room, n, passcode.trim())
@@ -235,8 +240,8 @@ export default function PreJoin({ room, isHost, onJoined }) {
               {!info.error && (
                 <div className="chips" style={{ marginTop: 10, gap: '6px 14px' }}>
                   {info.scheduled_at && <span className="chip"><Clock size={14} />{when(info.scheduled_at)} · {duration(info.duration_minutes)}</span>}
-                  {info.has_passcode && !isHost && <span className="chip"><Lock size={14} />Passcode required</span>}
-                  {info.lobby && !isHost && <span className="chip"><Shield size={14} />The host admits guests</span>}
+                  {info.has_passcode && !signedIn && <span className="chip"><Lock size={14} />Passcode required</span>}
+                  {info.lobby && !signedIn && <span className="chip"><Shield size={14} />The host admits guests</span>}
                 </div>
               )}
               {info.error && <div style={{ marginTop: 12 }}><Notice kind="warning">{info.error}</Notice></div>}
@@ -254,16 +259,17 @@ export default function PreJoin({ room, isHost, onJoined }) {
               <TextInput label="Your name" value={name} onChange={(e) => setName(e.target.value)} maxLength={60}
                          placeholder="How others will see you" autoComplete="name" error={nameError}
                          autoFocus={!name} />
-              {!isHost && info?.has_passcode !== false && (
+              {!signedIn && info?.has_passcode !== false && (
                 <PasswordInput label="Passcode" value={passcode} onChange={(e) => setPasscode(e.target.value)}
                                autoComplete="off" hint="From your meeting invitation." />
               )}
               {error && <Notice kind="error">{error}</Notice>}
               <Button type="submit" variant="primary" size="lg" block loading={busy} disabled={info?.locked}>
-                {isHost ? 'Start meeting' : info?.lobby ? 'Ask to join' : 'Join meeting'}
+                {asHost ? 'Start meeting' : signedIn ? 'Join meeting' : info?.lobby ? 'Ask to join' : 'Join meeting'}
               </Button>
               {info?.locked && <p className="field-hint">The host has locked this meeting.</p>}
-              {isHost && <p className="field-hint">You join as host and can admit guests from the People panel.</p>}
+              {asHost && <p className="field-hint">You join as host and can admit guests from the People panel.</p>}
+              {signedIn && !asHost && <p className="field-hint">You’re signed in, so you join directly — no passcode or waiting room.</p>}
             </form>
           )}
         </div>

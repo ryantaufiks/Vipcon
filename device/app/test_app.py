@@ -23,6 +23,7 @@ con.execute("INSERT INTO meetings (title, room_name, lobby, status) VALUES ('Leg
 con.commit()
 con.close()
 
+import jwt  # noqa: E402
 import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
@@ -175,3 +176,43 @@ def test_new_users_are_validated(client):
     users = {u["username"]: u for u in client.get("/api/v1/users", headers=auth).json()}
     assert users["newhost"]["display_name"] == "New Host" and users["newhost"]["role"] == "host"
     assert add().status_code == 409
+
+
+def test_console_join_by_role(client, monkeypatch):
+    monkeypatch.setattr(main, "MAX_CONCURRENT_MEETINGS", 100)
+    monkeypatch.setattr(main, "livekit_credentials", lambda: ("devkey", "devsecret"))
+    admin = {"Authorization": f"Bearer {token(client)}"}
+    for name, role in (("hosta", "host"), ("hostb", "host"), ("staff1", "member")):
+        client.post("/api/v1/users", json={"username": name, "password": f"{name}-password", "role": role,
+                                           "display_name": name.title()}, headers=admin)
+    auth = {n: {"Authorization": "Bearer " + client.post("/api/v1/login", json={"username": n, "password": f"{n}-password"}).json()["token"]}
+            for n in ("hosta", "hostb", "staff1")}
+
+    m = client.post("/api/v1/meetings", json={"title": "Host A's review", "passcode": "112233", "lobby": True},
+                    headers=auth["hosta"]).json()
+    assert client.post("/api/v1/meetings", json={"title": "Not allowed"}, headers=auth["staff1"]).status_code == 403
+
+    def join(who):
+        return client.post("/api/v1/token", json={"room": m["room_name"], "identity": ""}, headers=who)
+
+    def is_admin(r):
+        claims = jwt.decode(r.json()["token"], options={"verify_signature": False})
+        return claims["video"]["roomAdmin"]
+
+    owner, other_host, staff, boss = join(auth["hosta"]), join(auth["hostb"]), join(auth["staff1"]), join(admin)
+    assert owner.json()["host"] is True and is_admin(owner)
+    assert boss.json()["host"] is True and is_admin(boss)  # the Client Admin moderates every meeting
+    # Another host and staff join straight in (no passcode, no waiting room) but cannot moderate.
+    for r in (other_host, staff):
+        assert r.status_code == 200 and r.json()["host"] is False and not is_admin(r)
+    assert jwt.decode(staff.json()["token"], options={"verify_signature": False})["sub"] == "Staff1"
+    assert client.get(f"/api/v1/meetings/{m['id']}/lobby", headers=auth["hostb"]).status_code == 403
+    assert client.post(f"/api/v1/meetings/{m['id']}/end", headers=auth["staff1"]).status_code == 403
+
+    listed = {x["id"]: x for x in client.get("/api/v1/meetings", headers=auth["hostb"]).json()}
+    assert listed[m["id"]]["can_host"] is False and listed[m["id"]]["host_name"] == "Hosta"
+    listed = {x["id"]: x for x in client.get("/api/v1/meetings", headers=auth["hosta"]).json()}
+    assert listed[m["id"]]["can_host"] is True
+
+    client.post(f"/api/v1/meetings/{m['id']}/end", headers=auth["hosta"])
+    assert join(auth["staff1"]).status_code == 410

@@ -177,7 +177,8 @@ function Console({ token, onSignOut }) {
         </div>
         {page === 'people' && isAdmin
           ? <PeoplePage users={users} me={user} token={token} reload={loadUsers} fail={fail} />
-          : <MeetingsPage meetings={meetings} live={live} token={token} org={org} reload={loadMeetings} fail={fail} isAdmin={isAdmin} />}
+          : <MeetingsPage meetings={meetings} live={live} token={token} org={org} reload={loadMeetings} fail={fail} isAdmin={isAdmin}
+                          canCreate={isAdmin || user.role === 'host'} />}
       </div>
     </div>
   )
@@ -185,7 +186,7 @@ function Console({ token, onSignOut }) {
 
 // ---------------------------------------------------------------- meetings
 
-function MeetingsPage({ meetings, live, token, org, reload, fail, isAdmin }) {
+function MeetingsPage({ meetings, live, token, org, reload, fail, isAdmin, canCreate }) {
   const toast = useToast()
   const confirm = useConfirm()
   const [tab, setTab] = useState('upcoming')
@@ -252,9 +253,12 @@ function MeetingsPage({ meetings, live, token, org, reload, fail, isAdmin }) {
       <div className="page-head">
         <div>
           <h1>Meetings</h1>
-          <p className="page-sub">Schedule meetings, share invitations and start them as host.</p>
+          <p className="page-sub">
+            {canCreate ? 'Schedule meetings, share invitations and start them as host.'
+              : 'Meetings on this device. Join straight in — no passcode or waiting room.'}
+          </p>
         </div>
-        <Button variant="primary" icon={<Plus />} onClick={() => setCreating(true)}>New meeting</Button>
+        {canCreate && <Button variant="primary" icon={<Plus />} onClick={() => setCreating(true)}>New meeting</Button>}
       </div>
 
       <div className="toolbar">
@@ -281,8 +285,8 @@ function MeetingsPage({ meetings, live, token, org, reload, fail, isAdmin }) {
             <EmptyState icon={<Search />} title="No matching meetings">Try a different search.</EmptyState>
           ) : tab === 'upcoming' ? (
             <EmptyState icon={<Calendar />} title="No upcoming meetings"
-                        action={<Button variant="primary" icon={<Plus />} onClick={() => setCreating(true)}>New meeting</Button>}>
-              Create a meeting to get a private link and passcode to share.
+                        action={canCreate && <Button variant="primary" icon={<Plus />} onClick={() => setCreating(true)}>New meeting</Button>}>
+              {canCreate ? 'Create a meeting to get a private link and passcode to share.' : 'Meetings your hosts schedule appear here.'}
             </EmptyState>
           ) : (
             <EmptyState icon={<Clock />} title="No past meetings">Meetings you end appear here.</EmptyState>
@@ -307,7 +311,8 @@ function MeetingsPage({ meetings, live, token, org, reload, fail, isAdmin }) {
 function MeetingRow({ m, live, onCopyInvite, onCopyLink, onEnd, onDelete }) {
   const ended = m.status === 'ended'
   const parts = dateParts(m.scheduled_at)
-  const start = () => { window.location.href = `/m/${encodeURIComponent(m.room_name)}?host=1` }
+  const mine = m.can_host
+  const start = () => { window.location.href = `/m/${encodeURIComponent(m.room_name)}?${mine ? 'host' : 'staff'}=1` }
   return (
     <div className="list-row">
       <div className="row-main">
@@ -321,6 +326,7 @@ function MeetingRow({ m, live, onCopyInvite, onCopyLink, onEnd, onDelete }) {
             <span className="chip"><Clock size={14} />{when(m.scheduled_at)} · {duration(m.duration_minutes)}</span>
             {m.has_passcode && <span className="chip"><Lock size={14} />Passcode</span>}
             {m.lobby && <span className="chip hide-sm"><Shield size={14} />Waiting room</span>}
+            {!mine && m.host_name && <span className="chip hide-sm"><People size={14} />Host: {m.host_name}</span>}
           </span>
         </div>
       </div>
@@ -331,8 +337,9 @@ function MeetingRow({ m, live, onCopyInvite, onCopyLink, onEnd, onDelete }) {
       </div>
       <div className="row-actions">
         {!ended && (
-          <Button size="sm" variant={live ? 'primary' : 'secondary'} icon={<DoorIn size={16} />} onClick={start}>
-            <span className="hide-sm">{live ? 'Join' : 'Start'}</span>
+          <Button size="sm" variant={live ? 'primary' : 'secondary'} icon={<DoorIn size={16} />} onClick={start}
+                  title={mine ? 'Join as host' : 'Join (no passcode or waiting room for staff)'}>
+            <span className="hide-sm">{mine && !live ? 'Start' : 'Join'}</span>
           </Button>
         )}
         {!ended && (
@@ -343,7 +350,7 @@ function MeetingRow({ m, live, onCopyInvite, onCopyLink, onEnd, onDelete }) {
         )}>
           {!ended && <MenuItem icon={<Copy size={16} />} onClick={() => onCopyInvite(m)}>Copy invitation</MenuItem>}
           {!ended && <MenuItem icon={<LinkIcon size={16} />} onClick={() => onCopyLink(m)}>Copy link only</MenuItem>}
-          {!ended && <MenuItem icon={<Stop size={16} />} onClick={() => onEnd(m)}>End meeting</MenuItem>}
+          {!ended && mine && <MenuItem icon={<Stop size={16} />} onClick={() => onEnd(m)}>End meeting</MenuItem>}
           {!ended && onDelete && <div className="menu-sep" />}
           {onDelete && <MenuItem icon={<Trash size={16} />} danger onClick={() => onDelete(m)}>Delete</MenuItem>}
         </Menu>}
@@ -489,8 +496,8 @@ function MeetingReadyModal({ meeting, org, onClose }) {
 // ---------------------------------------------------------------- people
 
 const ROLES = [
-  { value: 'host', label: 'Host', description: 'Creates and runs meetings, admits guests.' },
-  { value: 'member', label: 'Member', description: 'Signs in to join meetings; cannot create them.' },
+  { value: 'host', label: 'Host', description: 'Creates meetings and moderates their own: admits guests, mutes, removes and ends. Joins other hosts’ meetings as staff.' },
+  { value: 'member', label: 'Member', description: 'Internal staff. Joins any meeting from the console without a passcode or waiting room; cannot create or moderate meetings.' },
 ]
 
 function PeoplePage({ users, me: current, token, reload, fail }) {
