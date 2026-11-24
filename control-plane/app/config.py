@@ -38,6 +38,14 @@ CF_ZONE_ID = env("CF_ZONE_ID")
 CF_ACCOUNT_ID = env("CF_ACCOUNT_ID")
 # The tunnel delivers requests to this listener on the device (Caddy, localhost only).
 TUNNEL_SERVICE = env("TUNNEL_SERVICE", "http://127.0.0.1:8081")
+# Media for guests outside the office: browsers relay audio and video through our TURN server
+# (coturn, see docker-compose.yml). Devices with internet access get the shared secret and hand
+# browsers short-lived credentials derived from it (TURN REST). Empty disables the relay.
+TURN_SECRET = env("TURN_SECRET")
+TURN_HOST = env("TURN_HOST", f"turn.{ROOT_DOMAIN}")
+TURN_PORT = int(env("TURN_PORT", "3478"))
+# Lifetime of the credentials a browser gets (seconds); LiveKit caps it at 24 h.
+TURN_TTL = int(env("TURN_TTL", "14400"))
 # Shared with the certs worker: it reads the wanted list and writes fullchain/privkey here.
 CERTS_WANTED = env("CERTS_WANTED", "/data/certs/wanted.txt")
 TLS_DIR = env("TLS_DIR", "/tls")

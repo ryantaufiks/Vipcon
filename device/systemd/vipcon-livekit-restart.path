@@ -1,0 +1,8 @@
+[Unit]
+Description=Restart LiveKit when the agent changes its config (internet access media relay)
+
+[Path]
+PathChanged=/etc/appliance/livekit.restart
+
+[Install]
+WantedBy=multi-user.target

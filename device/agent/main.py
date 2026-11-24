@@ -5,13 +5,16 @@ Every request to the control plane is signed with the device secret:
     X-Signature = hex(HMAC-SHA256(secret, timestamp + "\\n" + METHOD + "\\n" + path + "\\n" + body))
 """
 
+import base64
 import hashlib
 import hmac
 import json
 import os
+import re
 import secrets
 import shutil
 import socket
+import struct
 import subprocess
 import time
 
@@ -51,6 +54,18 @@ CLOUDFLARED_METRICS = os.environ.get("CLOUDFLARED_METRICS", "127.0.0.1:20241")
 # Seed for the key in the room-screen QR (see room_key in device/app and the kiosk): over the
 # internet, the list of meetings in progress opens only for people who can see the screen.
 ROOM_SEED_FILE = os.environ.get("ROOM_SEED_FILE", f"{ETC}/room_seed")
+# Internet access, media: guests outside the office reach LiveKit through our TURN relay. For that
+# LiveKit advertises the site's public IPv4 (as well as its LAN addresses) and hands browsers the
+# relay. The agent edits livekit.yaml, then asks the host to restart LiveKit by touching
+# LIVEKIT_RESTART (vipcon-livekit-restart.path), only while no meeting has anyone in it.
+LIVEKIT_YAML = os.environ.get("LIVEKIT_YAML", f"{ETC}/livekit.yaml")
+LIVEKIT_RESTART = os.environ.get("LIVEKIT_RESTART", f"{ETC}/livekit.restart")
+LIVEKIT_URL = os.environ.get("LIVEKIT_URL", "http://127.0.0.1:7880")
+LIVEKIT_KEY_FILE = os.environ.get("LIVEKIT_KEY_FILE", f"{ETC}/livekit_key")
+LIVEKIT_SECRET_FILE = os.environ.get("LIVEKIT_SECRET_FILE", f"{ETC}/livekit_secret")
+LAN_IP_FILE = os.environ.get("LAN_IP_FILE", f"{ETC}/lan_ip")
+STUN_SERVERS = [("stun.cloudflare.com", 3478), ("stun.l.google.com", 19302)]
+PUBLIC_IP_INTERVAL = int(os.environ.get("PUBLIC_IP_INTERVAL", "600"))
 
 
 def sign(method, path, body):
@@ -143,9 +158,11 @@ def heartbeat():
         update_kiosk(r.json())
         update_site(r.json())
         update_tunnel(r.json())
+        update_media(r.json())
     elif r.status_code == 403:
         update_kiosk({"license_status": "revoked", "claimed": True, "logo_sha256": None})
         update_tunnel({})  # revoked: no internet access
+        update_media({})
     else:
         check_tunnel()
 
@@ -333,6 +350,165 @@ def update_tunnel(info):
         publish(fqdn if tunnel.ok else "")
     except (OSError, ValueError, KeyError, requests.RequestException) as e:
         print("tunnel update error", e, flush=True)
+
+
+# ---------------------------------------------------------------- media relay (TURN)
+
+MEDIA_BEGIN = "  # >>> internet access: managed by the agent"
+MEDIA_END = "  # <<< internet access"
+media = {"turn": None, "turn_sha": None, "public_ip": "", "public_ip_at": 0, "waiting": False}
+
+
+def stun_public_ipv4(servers=None, timeout=3):
+    """The site's public IPv4 as the internet sees it (STUN binding request, RFC 5389), or ""."""
+    for host, port in servers or STUN_SERVERS:
+        tid = secrets.token_bytes(12)
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+                s.settimeout(timeout)
+                s.sendto(struct.pack("!HHI", 0x0001, 0, 0x2112A442) + tid, (host, port))
+                ip = parse_stun_response(s.recvfrom(2048)[0], tid)
+        except OSError:
+            continue
+        if ip:
+            return ip
+    return ""
+
+
+def parse_stun_response(data, tid):
+    """The IPv4 in a STUN binding success response's (XOR-)MAPPED-ADDRESS, or ""."""
+    if len(data) < 20 or struct.unpack("!H", data[:2])[0] != 0x0101 or data[8:20] != tid:
+        return ""
+    pos = 20
+    while pos + 4 <= len(data):
+        kind, size = struct.unpack("!HH", data[pos:pos + 4])
+        value = data[pos + 4:pos + 4 + size]
+        if kind in (0x0020, 0x0001) and len(value) >= 8 and value[1] == 0x01:
+            raw = struct.unpack("!I", value[4:8])[0]
+            if kind == 0x0020:
+                raw ^= 0x2112A442
+            return socket.inet_ntoa(struct.pack("!I", raw))
+        pos += 4 + size + (-size % 4)
+    return ""
+
+
+def valid_turn(turn):
+    """Only plain values go into livekit.yaml."""
+    try:
+        return bool(turn["servers"]) and re.fullmatch(r"[A-Za-z0-9_-]{16,128}", turn["secret"]) is not None and all(
+            re.fullmatch(r"[A-Za-z0-9.-]{1,253}", srv["host"]) and srv["protocol"] in ("udp", "tcp", "tls")
+            and 0 < int(srv["port"]) < 65536 for srv in turn["servers"]) and 0 < int(turn.get("ttl") or 14400)
+    except (KeyError, TypeError, ValueError):
+        return False
+
+
+def render_livekit(text, node_ip, turn):
+    """livekit.yaml with node_ip set to node_ip and, with turn, the relay block: LiveKit keeps
+    advertising its LAN addresses (advertise_internal_ip) next to node_ip, and gives browsers
+    credentials for the relay. Without turn the block is removed."""
+    out, skip = [], False
+    for line in text.splitlines():
+        if line.strip() == MEDIA_BEGIN.strip():
+            skip = True
+            continue
+        if skip:
+            skip = line.strip() != MEDIA_END.strip()
+            continue
+        if node_ip and re.match(r"^\s+node_ip:", line):
+            line = line[:line.index("node_ip:")] + f"node_ip: {node_ip}"
+        out.append(line)
+        if turn and line.rstrip() == "rtc:":
+            out += [MEDIA_BEGIN, "  advertise_internal_ip: true", "  turn_servers:"]
+            for srv in turn["servers"]:
+                out += [f"    - host: {srv['host']}", f"      port: {int(srv['port'])}",
+                        f"      protocol: {srv['protocol']}", f"      secret: {turn['secret']}",
+                        f"      ttl: {int(turn.get('ttl') or 14400)}"]
+            out.append(MEDIA_END)
+    return "\n".join(out) + "\n"
+
+
+def jwt_hs256(claims, secret):
+    def b64(data):
+        return base64.urlsafe_b64encode(data).rstrip(b"=").decode()
+
+    head = b64(json.dumps({"alg": "HS256", "typ": "JWT"}).encode()) + "." + b64(json.dumps(claims).encode())
+    return head + "." + b64(hmac.new(secret.encode(), head.encode(), hashlib.sha256).digest())
+
+
+def livekit_busy():
+    """True while a meeting has someone in it, or when LiveKit can't tell (restarting it then would
+    drop people). False when LiveKit isn't running at all."""
+    token = jwt_hs256({"iss": read_text(LIVEKIT_KEY_FILE), "nbf": int(time.time()) - 10,
+                       "exp": int(time.time()) + 60, "video": {"roomList": True}}, read_text(LIVEKIT_SECRET_FILE))
+    try:
+        r = requests.post(f"{LIVEKIT_URL}/twirp/livekit.RoomService/ListRooms", json={},
+                          headers={"Authorization": f"Bearer {token}"}, timeout=5)
+    except requests.ConnectionError:
+        return False
+    except requests.RequestException:
+        return True
+    if r.status_code != 200:
+        print("livekit rooms", r.status_code, r.text[:200], flush=True)
+        return True
+    try:
+        rooms = r.json().get("rooms") or []
+        return any(int(room.get("num_participants") or room.get("numParticipants") or 0) > 0 for room in rooms)
+    except (ValueError, TypeError, AttributeError):
+        return True
+
+
+def update_media(info):
+    """Called with the control plane's answer only: offline, livekit.yaml is left as it is (a stale
+    public address is harmless, and LAN meetings keep working either way)."""
+    want = info.get("turn_sha256")
+    try:
+        if not want:
+            media["turn"], media["turn_sha"] = None, None
+        elif media["turn_sha"] != want:
+            r = get("/api/v1/turn")
+            if r.status_code != 200:
+                print("turn fetch", r.status_code, flush=True)
+                return
+            turn = r.json()
+            sha = hashlib.sha256(json.dumps(turn, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+            if sha != want or not valid_turn(turn):
+                print("turn fetch: mismatch or invalid, ignored", flush=True)
+                return
+            media["turn"], media["turn_sha"] = turn, want
+        turn = media["turn"]
+        if turn and time.time() - media["public_ip_at"] >= PUBLIC_IP_INTERVAL:
+            media["public_ip"] = stun_public_ipv4() or media["public_ip"]
+            media["public_ip_at"] = time.time()
+        if turn and not media["public_ip"]:
+            return  # no public address yet: try again later
+        current = read_text(LIVEKIT_YAML)
+        if not turn and MEDIA_BEGIN.strip() not in current:
+            return  # never set up here: leave the installer's config alone
+        node_ip = media["public_ip"] if turn else (read_text(LAN_IP_FILE) or lan_ip())
+        apply_livekit(render_livekit(current + "\n", node_ip, turn))
+    except (OSError, ValueError, KeyError, requests.RequestException) as e:
+        print("media update error", e, flush=True)
+
+
+def apply_livekit(text):
+    """Write livekit.yaml and have the host restart LiveKit, once no meeting is running."""
+    with open(LIVEKIT_YAML) as f:
+        current = f.read()
+    if text.strip() == current.strip():
+        media["waiting"] = False
+        return
+    if livekit_busy():
+        if not media["waiting"]:
+            print("livekit config changed: waiting until no meeting is running", flush=True)
+        media["waiting"] = True
+        return
+    # In place (same inode): LiveKit's container bind-mounts this single file.
+    with open(LIVEKIT_YAML, "w") as f:
+        f.write(text)
+    os.chmod(LIVEKIT_YAML, 0o600)  # holds the LiveKit API secret and the relay secret
+    write_atomic(LIVEKIT_RESTART, str(int(time.time())).encode())
+    media["waiting"] = False
+    print("livekit config updated, restart requested", flush=True)
 
 
 def ensure_room_seed():

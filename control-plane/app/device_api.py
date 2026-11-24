@@ -25,6 +25,8 @@ from services import (
     tagline_for_device,
     tls_bundle,
     tunnel_token,
+    turn_config,
+    turn_sha256,
 )
 from web_common import client_ip
 
@@ -115,6 +117,7 @@ def heartbeat(request: Request, device=Depends(signed_device), db=Depends(get_db
     bundle = tls_bundle(device_fqdn(device))
     tunnel_ready = reconcile_tunnel(db, device, log)
     token = tunnel_token(device) if tunnel_ready else None
+    turn = turn_config(device) if token else None
     db.commit()
     if first_contact:
         sync_cert_wanted(db)  # a new device needs a certificate for its automatic name
@@ -133,6 +136,8 @@ def heartbeat(request: Request, device=Depends(signed_device), db=Depends(get_db
         # /api/v1/tunnel when it changes). Both null when the device has no internet access.
         "public_fqdn": device.public_dns if token else None,
         "tunnel_sha256": sha256_hex(token) if token else None,
+        # Media relay for guests outside the office (fetched from /api/v1/turn when it changes).
+        "turn_sha256": turn_sha256(turn) if turn else None,
     }
 
 
@@ -143,6 +148,15 @@ def tunnel(device=Depends(signed_device), db=Depends(get_db)):
     if not token:
         raise HTTPException(404, "no internet access")
     return {"public_fqdn": device.public_dns, "token": token}
+
+
+@router.get("/turn")
+def turn_relay(device=Depends(signed_device), db=Depends(get_db)):
+    """The TURN relay LiveKit on the device hands to browsers (with internet access only)."""
+    config = turn_config(device) if device.public_dns and internet_allowed(db, device) else None
+    if not config:
+        raise HTTPException(404, "no media relay")
+    return config
 
 
 @router.get("/tls")

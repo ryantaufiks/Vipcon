@@ -435,6 +435,27 @@ def reconcile_tunnel(db, device, log=None, problems=None):
     return bool(want and device.public_dns and device.tunnel_token_encrypted)
 
 
+def turn_config(device):
+    """The TURN relay a device with internet access hands to browsers, or None (no relay set up).
+    The secret is shared by all devices: whoever holds it can mint relay credentials."""
+    from config import TURN_HOST, TURN_PORT, TURN_SECRET, TURN_TTL
+
+    if not TURN_SECRET or not device.public_dns:
+        return None
+    return {
+        "servers": [{"host": TURN_HOST, "port": TURN_PORT, "protocol": proto} for proto in ("udp", "tcp")],
+        "secret": TURN_SECRET,
+        "ttl": TURN_TTL,
+    }
+
+
+def turn_sha256(config):
+    import hashlib
+    import json
+
+    return hashlib.sha256(json.dumps(config, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
 def tunnel_token(device):
     from security import decrypt_secret
 

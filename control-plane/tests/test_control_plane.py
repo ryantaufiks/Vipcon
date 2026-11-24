@@ -5,6 +5,8 @@
 
 import importlib.util
 import json
+import socket
+import struct
 import os
 import re
 import sys
@@ -574,6 +576,66 @@ def test_internet_access_tunnel(client, admin, monkeypatch):
     agent.update_tunnel(info)
     assert agent.read_text(agent.PUBLIC_FILE) == "remote1.example.test"
 
+    # Media relay for guests outside the office: once TURN is set up, the heartbeat carries its hash,
+    # the agent fetches it and puts it in livekit.yaml, restarting LiveKit only between meetings.
+    import config
+
+    assert info["turn_sha256"] is None and signed_get(client, agent, "/api/v1/turn").status_code == 404
+    monkeypatch.setattr(config, "TURN_SECRET", "a1" * 16)
+    info = hb()
+    turn = signed_get(client, agent, "/api/v1/turn").json()
+    assert turn["secret"] == "a1" * 16 and turn["ttl"] == 14400
+    assert [(s["host"], s["port"], s["protocol"]) for s in turn["servers"]] == [
+        ("turn.example.test", 3478, "udp"), ("turn.example.test", 3478, "tcp")]
+    lk, restart = os.path.join(etc, "livekit.yaml"), os.path.join(etc, "livekit.restart")
+    base = ("port: 7880\nrtc:\n  tcp_port: 7881\n  udp_port: 7882\n  use_external_ip: false\n"
+            "  node_ip: 192.168.5.5\nroom:\n  empty_timeout: 300\n")
+    with open(lk, "w") as f:
+        f.write(base)
+    with open(os.path.join(etc, "lan_ip"), "w") as f:
+        f.write("192.168.5.5")
+    agent.LIVEKIT_YAML, agent.LIVEKIT_RESTART, agent.LAN_IP_FILE = lk, restart, os.path.join(etc, "lan_ip")
+    busy = [True]
+    agent.livekit_busy = lambda: busy[0]
+    agent.stun_public_ipv4 = lambda: "203.0.113.7"
+    agent.update_media(info)
+    assert open(lk).read() == base and not os.path.exists(restart)  # a meeting is running: wait
+    busy[0] = False
+    agent.update_media(info)
+    text = open(lk).read()
+    assert "node_ip: 203.0.113.7" in text and "advertise_internal_ip: true" in text and "empty_timeout: 300" in text
+    assert text.count(f"secret: {'a1' * 16}") == 2 and "protocol: tcp" in text
+    assert os.path.exists(restart) and oct(os.stat(lk).st_mode & 0o777) == "0o600"
+    try:
+        import yaml
+    except ImportError:
+        yaml = None
+    if yaml:
+        rtc = yaml.safe_load(text)["rtc"]
+        assert rtc["node_ip"] == "203.0.113.7" and rtc["advertise_internal_ip"] is True
+        assert [s["protocol"] for s in rtc["turn_servers"]] == ["udp", "tcp"] and rtc["udp_port"] == 7882
+    os.remove(restart)
+    agent.update_media(info)  # nothing changed: no restart
+    assert not os.path.exists(restart) and open(lk).read() == text
+
+    # Without an answer from the control plane livekit.yaml is left alone.
+    real_post, agent.post = agent.post, offline
+    try:
+        agent.heartbeat()
+    finally:
+        agent.post = real_post
+    assert open(lk).read() == text and not os.path.exists(restart)
+
+    # Relay switched off: back to the installer's config.
+    monkeypatch.setattr(config, "TURN_SECRET", None)
+    info = hb()
+    assert info["turn_sha256"] is None
+    agent.update_media(info)
+    assert open(lk).read() == base and os.path.exists(restart)
+    os.remove(restart)
+    agent.update_media(info)
+    assert not os.path.exists(restart)
+
     # A new Site ID moves the public name.
     client.post(f"/devices/{dev}", data={"csrf": admin, "connectivity_mode": "standard", "site_id": "remote2",
                                          "client_id": str(client_id), "plan_id": str(plan_id)})
@@ -625,6 +687,24 @@ def test_internet_access_tunnel(client, admin, monkeypatch):
     db = SessionLocal()
     assert db.query(Device).filter_by(device_id=dev).one().site_id == "remote2"
     db.close()
+
+
+def test_agent_stun_and_turn_validation():
+    agent = load_agent("dev_x", "secret")
+    tid = bytes(range(12))
+    ip = struct.unpack("!I", socket.inet_aton("198.51.100.20"))[0] ^ 0x2112A442
+    attr = struct.pack("!HHBBHI", 0x0020, 8, 0, 1, 40000 ^ 0x2112, ip)
+    response = struct.pack("!HHI", 0x0101, len(attr), 0x2112A442) + tid + attr
+    assert agent.parse_stun_response(response, tid) == "198.51.100.20"
+    assert agent.parse_stun_response(response, bytes(12)) == ""  # not our request
+    assert agent.parse_stun_response(response[:10], tid) == ""
+
+    good = {"servers": [{"host": "turn.example.test", "port": 3478, "protocol": "udp"}], "secret": "a1" * 16, "ttl": 600}
+    assert agent.valid_turn(good)
+    assert not agent.valid_turn(dict(good, secret="a1" * 16 + "\n  use_external_ip: true"))
+    assert not agent.valid_turn(dict(good, servers=[{"host": "x\n", "port": 3478, "protocol": "udp"}]))
+    assert not agent.valid_turn(dict(good, servers=[{"host": "turn.example.test", "port": 3478, "protocol": "http"}]))
+    assert not agent.valid_turn(dict(good, servers=[]))
 
 
 def test_public_site_and_console_are_separate(client):
