@@ -4,7 +4,7 @@ import {OrbitControls} from 'three/addons/controls/OrbitControls.js';
 import {RoomEnvironment} from 'three/addons/environments/RoomEnvironment.js';
 {
 const hero = document.querySelector('.hero'), box = document.querySelector('.stagebox'), canvas = document.getElementById('stage');
-const loader = document.getElementById('loader'), hotsEl = document.getElementById('hots');
+const loader = document.getElementById('loader'), hotsEl = document.getElementById('hots'), dimsEl = document.getElementById('dims');
 const cap = document.getElementById('caption'), capK = document.getElementById('capK'), capT = document.getElementById('capT'), capP = document.getElementById('capP');
 const tourBtn = document.getElementById('tour'), resetBtn = document.getElementById('reset'), exploreBtn = document.getElementById('explore');
 const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -50,10 +50,10 @@ const M = {
 // hotspots in model space (glTF millimetres): point the camera looks at, camera direction hint, distance,
 // and where the marker sits: on an edge next to the feature, so it never covers the screen, vents or ports
 const HOT = [
-  {k: 'DISPLAY', t: '3.5″ touch display', p: 'An IPS touch screen in an armoured bezel. Tap to start a meeting, no keyboard needed.', at: [42.5, 34, -28], mark: [0, 35, -58], dir: [0, 1.25, 0.55], d: 0.85},
-  {k: 'ARMOUR', t: 'Rugged corner bumpers', p: 'Raised 45° bumpers protect every corner on a busy boardroom table.', at: [-7, 20, -64], dir: null, d: 0.62},
-  {k: 'AIRFLOW', t: 'Silent passive cooling', p: 'Cool air enters below and leaves through angled side vents. No fan, no noise.', at: [61, 22, -63], mark: [61, 6, -64.2], dir: null, d: 0.62},
-  {k: 'PORTS', t: 'Only the ports you need', p: 'Gigabit LAN, USB-C power and dual micro-HDMI. Every other port is sealed.', at: [92, 14, -45.7], mark: [92.8, 28, -45.7], dir: null, d: 0.62}
+  {k: 'YOUR BRAND', t: 'Your logo on the screen', p: 'The 3.5″ touch screen shows your company\'s logo and tagline, set from the management console. Tap it to start a meeting.', at: [42.5, 34, -28], mark: [0, 35, -58], dir: [0, 1.25, 0.55], d: 0.85},
+  {k: 'RUGGED', t: 'Rugged, solid build', p: 'An armoured three-part shell with raised corner bumpers, built to survive travel bags and busy boardroom tables.', at: [-7, 20, -64], dir: null, d: 0.62},
+  {k: 'COOLING', t: 'Silent passive cooling', p: 'Air enters below and leaves through angled side vents, keeping the device at a steady temperature. No fan, no noise.', at: [61, 22, -63], mark: [61, 6, -64.2], dir: null, d: 0.62},
+  {k: 'PLUG & PLAY', t: 'Plug in and meet', p: 'Connect Ethernet for your local network or the internet, add USB-C power, and it\'s ready. No software to install.', at: [92, 14, -45.7], mark: [92.8, 28, -45.7], dir: null, d: 0.62}
 ];
 let center = new THREE.Vector3(), ready = false;
 const tex = new THREE.TextureLoader().load('/static/site/vipcon_screen.jpg', t => { t.colorSpace = THREE.SRGBColorSpace; t.flipY = false; t.anisotropy = 8; });
@@ -91,7 +91,81 @@ function onModel(g) {
     b.addEventListener('click', e => { e.stopPropagation(); stopTour(); focus(i); });
     hotsEl.appendChild(b); h.el = b;
   });
+  buildDims();
   ready = true; loader.style.opacity = 0; goHome(false);
+  playIntro(6800);
+}
+
+// opening "portable" intro: white dimension lines draw along the device, then its size and weight,
+// with the caption; it fades out by itself (or as soon as the visitor takes over) and the turntable starts
+const PORTABLE = {k: 'PORTABLE', t: 'A meeting server you can carry', p: 'The whole meeting server fits in your hand: 10.1 × 7.1 × 3.5 cm and about 145 g. Take it to any office, site or hotel room, plug it in and meet, with full control over every call.'};
+const lineMat = new THREE.LineBasicMaterial({color: 0xffffff, transparent: true, opacity: 0, depthTest: false, toneMapped: false});
+const extMat = new THREE.LineBasicMaterial({color: 0xffffff, transparent: true, opacity: 0, depthTest: false, toneMapped: false});
+const dotMat = new THREE.MeshBasicMaterial({color: 0xffffff, transparent: true, opacity: 0, depthTest: false, toneMapped: false});
+const dimsG = new THREE.Group(); dimsG.visible = false;
+const DIMS = [];
+let intro = null;
+function buildDims() {
+  // model space, millimetres: case x -8.2…92.8, y 0…35, z -64.2…7.2; z = -64.2 and x = -8.2 face the camera
+  const X0 = -8.2, X1 = 92.8, Z0 = -64.2, Z1 = 7.2, H = 35, O = 10, y = 0.3, c = O * 0.75;
+  const V = (a, b, d) => new THREE.Vector3(a, b, d);
+  const spec = [
+    {label: '10.1 cm', a: V(X1, y, Z0 - O), b: V(X0, y, Z0 - O), ext: [V(X1, y, Z0 - 2), V(X1, y, Z0 - O - 3), V(X0, y, Z0 - 2), V(X0, y, Z0 - O - 3)], t0: 300, d: 900},
+    {label: '7.1 cm', a: V(X0 - O, y, Z0), b: V(X0 - O, y, Z1), ext: [V(X0 - 2, y, Z0), V(X0 - O - 3, y, Z0), V(X0 - 2, y, Z1), V(X0 - O - 3, y, Z1)], t0: 1100, d: 800, at: 0.8},
+    {label: '3.5 cm', a: V(X1 + c, 0, Z0 - c), b: V(X1 + c, H, Z0 - c), ext: [V(X1 + 1, H, Z0 - 1), V(X1 + c + 3, H, Z0 - c - 3)], t0: 1800, d: 600},
+  ];
+  spec.forEach(s => {
+    const geo = new THREE.BufferGeometry().setFromPoints([s.a, s.a.clone()]);
+    const line = new THREE.Line(geo, lineMat); line.renderOrder = 10;
+    const ext = new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(s.ext), extMat); ext.renderOrder = 10;
+    const dot = r => { const m = new THREE.Mesh(new THREE.SphereGeometry(1.1, 12, 8), dotMat); m.renderOrder = 11; return m; };
+    const d0 = dot(), d1 = dot(); d0.position.copy(s.a); d1.position.copy(s.b);
+    dimsG.add(line, ext, d0, d1);
+    DIMS.push({...s, geo, ext, d0, d1, mid: s.a.clone().lerp(s.b, s.at ?? 0.5)});
+  });
+  DIMS.push({label: '≈ 145 g', weight: true, mid: V((X0 + X1) / 2, H + 16, (Z0 + Z1) / 2), t0: 2500, d: 400});
+  inner.add(dimsG);
+  DIMS.forEach(d => {
+    const el = document.createElement('span'); el.className = 'dimpill' + (d.weight ? ' weight' : ''); el.textContent = d.label;
+    dimsEl.appendChild(el); d.el = el;
+  });
+}
+function playIntro(hold) {
+  if (!DIMS.length) return;
+  intro = {s: performance.now() - (reduce ? 4000 : 0), hold: reduce ? Math.max(hold, 4000) + 4000 : hold, cut: Infinity};
+  controls.autoRotate = false; dimsG.visible = true; hotsEl.classList.add('intro');
+  capK.textContent = PORTABLE.k; capT.textContent = PORTABLE.t; capP.textContent = PORTABLE.p; cap.classList.add('show', 'intro');
+}
+function endIntro(still = false) {
+  if (!intro) return;
+  if (still) intro.still = true;  // the visitor took over: keep the device where they put it
+  const t = performance.now() - intro.s;
+  intro.cut = Math.min(intro.cut, t); intro.hold = Math.min(intro.hold, t);
+}
+function finishIntro() {
+  const was = intro; intro = null; cap.classList.remove('intro'); dimsG.visible = false; hotsEl.classList.remove('intro');
+  DIMS.forEach(d => { d.el.style.opacity = 0; });
+  if (focused < 0) { cap.classList.remove('show'); if (!tourT && !was.still) controls.autoRotate = !reduce; }
+}
+function introFrame(r) {
+  const t = performance.now() - intro.s, te = Math.min(t, intro.cut);
+  const seg = (a, d) => reduce ? 1 : Math.min(1, Math.max(0, (te - a) / d));
+  const fade = t < intro.hold ? 1 : Math.max(0, 1 - (t - intro.hold) / 500);
+  lineMat.opacity = dotMat.opacity = 0.95 * fade; extMat.opacity = 0.45 * fade;
+  DIMS.forEach(d => {
+    const p = ease(seg(d.t0, d.d));
+    if (d.geo) {
+      const pos = d.geo.attributes.position; v.copy(d.a).lerp(d.b, p);
+      pos.setXYZ(1, v.x, v.y, v.z); pos.needsUpdate = true;
+      d.ext.visible = d.d0.visible = p > 0; d.d1.visible = p >= 1;
+    }
+    v.copy(d.mid); inner.localToWorld(v); v.project(camera);
+    const hw = d.el.offsetWidth / 2 + 6;  // keep the label on screen
+    const x = Math.min(r.width - hw, Math.max(hw, (v.x * .5 + .5) * r.width)), y = (-v.y * .5 + .5) * r.height;
+    d.el.style.transform = `translate(${x}px,${y}px) translate(-50%,-50%) scale(${0.85 + 0.15 * seg(d.t0 + d.d - 200, 350)})`;
+    d.el.style.opacity = fade * seg(d.t0 + d.d - 200, 350);
+  });
+  if (fade === 0) finishIntro();
 }
 
 // camera moves
@@ -105,16 +179,17 @@ function fly(pos, tgt, ms = 1500) {
 function wide() { return box.clientWidth > 900; }
 function homePos() {
   const p = HOME.pos.clone(), t = HOME.tgt.clone();
-  if (!wide()) p.multiplyScalar(1.12);
+  if (!wide()) p.multiplyScalar(box.clientWidth < 600 ? 1.5 : 1.25);  // leave room for the size labels on phones
   return {p, t};
 }
 function goHome(animate = true) {
-  focused = -1; cap.classList.remove('show'); HOT.forEach(h => h.el && h.el.classList.remove('on'));
+  focused = -1; if (!intro) cap.classList.remove('show'); HOT.forEach(h => h.el && h.el.classList.remove('on'));
   const {p, t} = homePos(); if (animate) fly(p, t); else { camera.position.copy(p); controls.target.copy(t); }
-  controls.autoRotate = !reduce;
+  controls.autoRotate = !reduce && !intro;
 }
 function focus(i) {
   const h = HOT[i]; if (!h || !h.cam) return;
+  endIntro(); cap.classList.remove('intro');
   focused = i; controls.autoRotate = false;
   HOT.forEach((x, j) => x.el.classList.toggle('on', j === i));
   capK.textContent = h.k; capT.textContent = h.t; capP.textContent = h.p; cap.classList.add('show');
@@ -123,13 +198,17 @@ function focus(i) {
 
 // cinematic tour: glide through every detail, then a slow orbit
 let tourT = null, tourI = 0;
-function step() { focus(tourI % HOT.length); tourI++; tourT = setTimeout(step, reduce ? 4000 : 4600); }
+function step() {
+  const i = tourI % (HOT.length + 1); tourI++;
+  if (i === 0) { goHome(); playIntro(4400); } else focus(i - 1);
+  tourT = setTimeout(step, reduce ? 4000 : i === 0 ? 5400 : 4600);
+}
 function startTour() { if (!ready) return; tourBtn.setAttribute('aria-pressed', 'true'); tourBtn.querySelector('span').textContent = 'Stop tour'; tourI = 0; step(); }
 function stopTour() { clearTimeout(tourT); tourT = null; tourBtn.setAttribute('aria-pressed', 'false'); tourBtn.querySelector('span').textContent = 'Cinematic tour'; }
-tourBtn.addEventListener('click', () => tourT ? (stopTour(), goHome()) : startTour());
-resetBtn.addEventListener('click', () => { stopTour(); goHome(); });
+tourBtn.addEventListener('click', () => tourT ? (stopTour(), endIntro(), goHome()) : startTour());
+resetBtn.addEventListener('click', () => { stopTour(); endIntro(); goHome(); });
 exploreBtn.addEventListener('click', () => { if (!wide()) box.scrollIntoView({behavior: reduce ? 'auto' : 'smooth'}); stopTour(); startTour(); });
-controls.addEventListener('start', () => { anim = null; stopTour(); controls.autoRotate = false; });
+controls.addEventListener('start', () => { anim = null; stopTour(); endIntro(true); controls.autoRotate = false; });
 
 // click the device: zoom to the display, click again to pull back
 const ray = new THREE.Raycaster(), ndc = new THREE.Vector2(); let down = null;
@@ -165,6 +244,7 @@ renderer.setAnimationLoop(() => {
   renderer.render(scene, camera);
   if (ready) {
     const r = canvas.getBoundingClientRect();
+    if (intro) introFrame(r);
     // dim the markers while the device turns on its own; zoomed in, show only the current one
     hotsEl.classList.toggle('dim', controls.autoRotate && !anim && focused < 0);
     HOT.forEach((h, i) => {
