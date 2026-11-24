@@ -1,0 +1,11 @@
+[Unit]
+Description=Restart LiveKit with its new config
+After=appliance.service docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/appliance
+ExecStart=/usr/bin/docker compose up -d --force-recreate --no-deps livekit
+StandardOutput=journal
+StandardError=journal

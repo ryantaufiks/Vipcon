@@ -52,6 +52,12 @@ def migrate():
             conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ix_devices_site_id ON devices (site_id)"))
         if "dns_ip" not in cols:
             conn.execute(text("ALTER TABLE devices ADD COLUMN dns_ip VARCHAR(45)"))
+        if "internet_enabled" not in cols:
+            conn.execute(text("ALTER TABLE devices ADD COLUMN internet_enabled BOOLEAN DEFAULT FALSE"))
+        for name, sqltype in (("tunnel_id", "VARCHAR(64)"), ("tunnel_token_encrypted", "TEXT"),
+                              ("public_dns", "VARCHAR(255)")):
+            if name not in cols:
+                conn.execute(text(f"ALTER TABLE devices ADD COLUMN {name} {sqltype}"))
 
 
 @asynccontextmanager

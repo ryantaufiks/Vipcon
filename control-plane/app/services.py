@@ -272,7 +272,10 @@ def tagline_for_device(db, device):
 # ---------------------------------------------------------------- site id (office-network name)
 
 SITE_ID_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{1,28}[a-z0-9])$")
-RESERVED_SITE_IDS = {"www", "api", "app", "admin", "control", "lan", "local", "mail", "status", "vipcon", "test"}
+# A Site ID is also the device's public name (<site>.<root>) when it has internet access, so the
+# labels the product itself uses on the root domain are reserved too.
+RESERVED_SITE_IDS = {"www", "api", "app", "admin", "console", "control", "lan", "local", "mail", "status",
+                     "vipcon", "test", "docs", "help", "support", "blog", "shop", "turn", "stun", "relay"}
 DEFAULT_LABEL_RE = re.compile(r"^dev-[0-9a-f]+$")  # every device's automatic name, see device_label()
 
 
@@ -303,6 +306,12 @@ def device_label(device):
 def device_fqdn(device):
     """The device's name on the office network, e.g. securistate.lan.<root> or dev-7edad6….lan.<root>."""
     return site_fqdn(device_label(device))
+
+
+def public_fqdn(device):
+    """The device's public name for internet access, one level under the root (covered by
+    Cloudflare's Universal SSL): client1.<root> or dev-7edad6….<root>."""
+    return f"{device_label(device)}.{ROOT_DOMAIN}"
 
 
 def site_fqdn(site_id):
@@ -358,3 +367,96 @@ def tls_bundle(fqdn):
     except ValueError:
         return None
     return chain, key, hashlib.sha256(chain.encode()).hexdigest(), not_after
+
+
+# ---------------------------------------------------------------- internet access (tunnel)
+
+
+def device_plan(db, device):
+    _, contract = license_status(db, device)
+    return contract.plan if contract else device.plan
+
+
+def plan_has_internet(plan):
+    return bool(plan and (plan.features or {}).get("internet_access"))
+
+
+def internet_allowed(db, device):
+    """Internet access needs the admin's switch, a plan that includes it and an active licence."""
+    status, _ = license_status(db, device)
+    return bool(device.internet_enabled) and status == "active" and plan_has_internet(device_plan(db, device))
+
+
+def tunnel_name(device):
+    return f"vipcon-{device.device_id}"
+
+
+def reconcile_tunnel(db, device, log=None, problems=None):
+    """Make Cloudflare match what the device is allowed: a tunnel routed from its public name, or
+    nothing. Idempotent and cheap when nothing changed; errors leave the state for the next try.
+    Returns True when the device's tunnel is ready (token stored, name routed). A public name that
+    already has someone else's DNS records is left alone (and the old name, if any, keeps working);
+    the reason goes to problems, a list, when given."""
+    import cloudflare
+    from config import TUNNEL_SERVICE
+    from security import encrypt_secret
+
+    if not cloudflare.enabled():
+        return False
+    want = public_fqdn(device) if internet_allowed(db, device) else None
+    try:
+        if want:
+            if not device.tunnel_id or not device.tunnel_token_encrypted:
+                tunnel_id, token = cloudflare.ensure_tunnel(tunnel_name(device))
+                device.tunnel_id, device.tunnel_token_encrypted = tunnel_id, encrypt_secret(token)
+            if device.public_dns != want:
+                cloudflare.route_tunnel(device.tunnel_id, want, TUNNEL_SERVICE)
+                if device.public_dns:
+                    cloudflare.delete_name(device.public_dns)
+                device.public_dns = want
+            return True
+        if device.public_dns:
+            cloudflare.delete_name(device.public_dns)
+            device.public_dns = None
+        if device.tunnel_id:
+            cloudflare.delete_tunnel(device.tunnel_id)
+            device.tunnel_id = device.tunnel_token_encrypted = None
+    except cloudflare.NameTaken as e:
+        if log:
+            log.warning("tunnel update for %s: %s", device.device_id, e)
+        if problems is not None:
+            problems.append(f"https://{want} is already used by another DNS record in Cloudflare (a website, "
+                            "mail or a manual entry), so it was left alone. Choose another Site ID, or remove "
+                            "that record if it is no longer needed.")
+    except cloudflare.CloudflareError as e:
+        if log:
+            log.warning("tunnel update for %s failed: %s", device.device_id, e)
+    # A failed move to a new name leaves the current one routed: the device keeps serving it.
+    return bool(want and device.public_dns and device.tunnel_token_encrypted)
+
+
+def turn_config(device):
+    """The TURN relay a device with internet access hands to browsers, or None (no relay set up).
+    The secret is shared by all devices: whoever holds it can mint relay credentials."""
+    from config import TURN_HOST, TURN_PORT, TURN_SECRET, TURN_TTL
+
+    if not TURN_SECRET or not device.public_dns:
+        return None
+    return {
+        "servers": [{"host": TURN_HOST, "port": TURN_PORT, "protocol": proto} for proto in ("udp", "tcp")],
+        "secret": TURN_SECRET,
+        "ttl": TURN_TTL,
+    }
+
+
+def turn_sha256(config):
+    import hashlib
+    import json
+
+    return hashlib.sha256(json.dumps(config, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
+def tunnel_token(device):
+    from security import decrypt_secret
+
+    return decrypt_secret(device.tunnel_token_encrypted) if device.tunnel_token_encrypted else None

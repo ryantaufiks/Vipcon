@@ -36,6 +36,9 @@ install -m 755 "$SRC/provisioning/first-boot.sh" "$SRC/provisioning/factory-rese
 rm -rf "${OPT:?}/web/"*
 cp -a "$SRC/web/dist/." "$OPT/web/"
 install -m 644 "$SRC/systemd/appliance.service" /etc/systemd/system/appliance.service
+# The agent edits livekit.yaml for the internet-access media relay and touches livekit.restart.
+install -m 644 "$SRC/systemd/vipcon-livekit-restart.path" "$SRC/systemd/vipcon-livekit-restart.service" \
+    /etc/systemd/system/
 
 echo "== network setup (Wi-Fi hotspot when offline, LAN IP follow-up)"
 install -d -m 755 "$OPT/netsetup" /etc/NetworkManager/dnsmasq-shared.d /etc/NetworkManager/dispatcher.d
@@ -46,6 +49,7 @@ install -m 755 "$SRC/netsetup/90-vipcon-lan-ip" /etc/NetworkManager/dispatcher.d
 install -m 755 "$SRC/provisioning/apply-lan-ip.sh" "$OPT/apply-lan-ip.sh"
 systemctl daemon-reload
 systemctl enable vipcon-netsetup.service >/dev/null
+systemctl enable --now vipcon-livekit-restart.path >/dev/null
 systemctl restart vipcon-netsetup.service
 
 if [ -n "$JSON" ]; then

@@ -22,6 +22,7 @@
       <dt>DNS</dt><dd class="small">{% if not dns_enabled %}<span class="warn">Cloudflare not configured</span>{% elif device.dns_ip %}{{ site_fqdn }} → <span class="mono">{{ device.dns_ip }}</span>{% else %}<span class="muted">waiting for the next heartbeat</span>{% endif %}</dd>
       <dt>Certificate</dt><dd class="small">{% if tls %}Let's Encrypt, valid until {{ tls[3]|dt(False) }}{% elif not dns_enabled %}<span class="warn">Cloudflare not configured</span>{% else %}<span class="muted">being issued (a few minutes)</span>{% endif %}</dd>
       {% endif %}
+      <dt>Internet link</dt><dd class="small">{% if public_taken %}<span class="warn">https://{{ public_fqdn }} is already used by another DNS record; choose another Site ID</span>{% if device.public_dns %}<br>still on <a class="mono" href="https://{{ device.public_dns }}" rel="noreferrer">https://{{ device.public_dns }}</a>{% endif %}{% elif internet_allowed and device.public_dns %}<a class="mono" href="https://{{ device.public_dns }}" rel="noreferrer">https://{{ device.public_dns }}</a>{% elif internet_allowed %}<span class="muted">setting up (next heartbeat)</span>{% elif device.internet_enabled and not plan_internet %}<span class="warn">the plan doesn't include internet access</span>{% elif device.internet_enabled %}<span class="warn">needs an active contract</span>{% else %}<span class="muted">off</span>{% endif %}</dd>
       <dt>Fallback link</dt><dd class="mono small">https://{{ device.device_id }}.local.{{ ROOT_DOMAIN }}</dd>
     </dl>
   </div>
@@ -48,6 +49,17 @@
     <button class="primary">Save</button>
   </form>
 </div>
+
+<form method="post" action="/devices/{{ device.device_id }}/internet" class="card">
+  {{ csrf_field() }}
+  <h2>Internet access</h2>
+  <p class="small muted">One meeting link that works in the room and from anywhere: <span class="mono">https://{{ public_fqdn }}</span>.
+    Through the internet only meeting pages are reachable; admin and claim stay on the office network.
+    {% if not plan_internet %}<br><span class="warn">The device's plan doesn't include internet access.</span>{% endif %}
+    {% if not dns_enabled %}<br><span class="warn">Cloudflare not configured.</span>{% endif %}</p>
+  <label class="check"><input type="checkbox" name="enabled" {{ 'checked' if device.internet_enabled }}> Allow internet access for this device</label>
+  <button>Save</button>
+</form>
 
 <div class="card">
   <h2>Actions</h2>

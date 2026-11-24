@@ -34,6 +34,26 @@ Start with `LE_STAGING=1` (untrusted test certificates, no rate limits), then se
 Routers with DNS-rebind protection may refuse names that resolve to private IPs; the device's
 IP address (and the fallback `dev_….local` name) keep working.
 
+## Internet access (one public link per device)
+
+A plan with **Internet access** ticked, an active contract and the device's own switch (device
+page → Internet access) give the device a public name `https://<site-id>.<ROOT_DOMAIN>` (or
+`dev-<id>.<ROOT_DOMAIN>`). Meeting links and the room-screen QR then use it, so the same link
+works in the room and from anywhere, and site routers with DNS-rebind protection don't matter.
+
+- The app creates a Cloudflare Tunnel per device (`vipcon-<device id>`), routes the public name to
+  it (proxied `CNAME`) and hands the device its token over the signed API (`GET /api/v1/tunnel`).
+  The agent runs `cloudflared` and publishes the name only while the tunnel is connected.
+- Through the tunnel the device serves only meeting pages and guest APIs; admin, claim and
+  account APIs stay on the office network. The meetings-in-progress list needs the daily key
+  from the room-screen QR.
+- Switching it off, a plan without it, an expired contract, suspending or revoking the device
+  removes the name and the tunnel.
+
+Needs `Account → Cloudflare Tunnel → Edit` on the same `CF_API_TOKEN` (`CF_ACCOUNT_ID` is
+optional). Media between remote guests and the device needs a TURN relay, which comes in phase 2
+(see `docs/design-internet-access.md`).
+
 ## Superadmin
 
 - Login is email + password + TOTP (mandatory). 5 failures lock the account for 15 minutes.

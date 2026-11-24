@@ -50,6 +50,11 @@ def list_participants(room):
     return _rpc("ListParticipants", {"room": room}, room)
 
 
+def delete_room(room):
+    """Close the room: everyone still in it is disconnected."""
+    return _rpc("DeleteRoom", {"room": room}, room, grants={"roomCreate": True})
+
+
 def remove_participant(room, identity):
     return _rpc("RemoveParticipant", {"room": room, "identity": identity}, room)
 

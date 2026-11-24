@@ -1,3 +1,6 @@
+import hashlib
+import json
+import hmac
 import os
 import re
 import secrets
@@ -7,13 +10,13 @@ from datetime import datetime, timedelta, timezone
 
 import jwt
 import requests
-from fastapi import Depends, FastAPI, Header, HTTPException, Response
+from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response
 from pydantic import BaseModel
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import sessionmaker
 
 from models import Base, LobbyRequest, Meeting, OrgSettings, User
-from livekit_admin import list_participants, list_rooms, mute_participant, remove_participant
+from livekit_admin import delete_room, list_participants, list_rooms, mute_participant, remove_participant
 from security import (
     create_session_token,
     decode_session_token,
@@ -64,7 +67,7 @@ def require_admin(user):
 
 
 def require_host_or_admin(user, m):
-    if user.role != "admin" and m.host_user_id != user.id:
+    if not can_moderate(user, m):
         raise HTTPException(403, "host only")
 
 
@@ -83,18 +86,45 @@ def current_user(authorization: str = Header(None), db=Depends(get_db)):
 
 SITE_FILE = os.environ.get("SITE_FILE", "/etc/appliance/site_fqdn")
 LAN_IP_FILE = os.environ.get("LAN_IP_FILE", "/etc/appliance/lan_ip")
+# Internet access: the public name, written by the agent while the device's tunnel is connected.
+PUBLIC_FILE = os.environ.get("PUBLIC_FILE", "/etc/appliance/public_fqdn")
+ROOM_SEED_FILE = os.environ.get("ROOM_SEED_FILE", "/etc/appliance/room_seed")
+
+
+def first_line(path):
+    try:
+        with open(path) as f:
+            return f.read().strip()
+    except OSError:
+        return ""
+
+
+def public_base():
+    """The meeting link everyone gets: the public name while the tunnel is up (works in the room
+    and from anywhere), otherwise the office-network link."""
+    host = first_line(PUBLIC_FILE)
+    return f"https://{host}" if host else local_base()
+
+
+def room_keys(at=None):
+    """Keys for the room-screen QR (the kiosk computes the same): today's and yesterday's (UTC),
+    so a page opened just before midnight keeps working."""
+    seed = first_line(ROOM_SEED_FILE)
+    if not seed:
+        return []
+    day = (at or datetime.now(timezone.utc)).date()
+    return [hmac.new(seed.encode(), f"now:{d.isoformat()}".encode(), hashlib.sha256).hexdigest()[:20]
+            for d in (day, day - timedelta(days=1))]
+
+
+def from_internet(request):
+    """Set only by Caddy's tunnel listener; stripped from every other request."""
+    return request.headers.get("x-vipcon-public") == "1"
 
 
 def local_base():
     """Office-network link: the device's name once its certificate is in place (written by the
     agent), otherwise its LAN IP."""
-    def first_line(path):
-        try:
-            with open(path) as f:
-                return f.read().strip()
-        except OSError:
-            return ""
-
     host = first_line(SITE_FILE) or first_line(LAN_IP_FILE) or "localhost"
     return f"https://{host}"
 
@@ -120,8 +150,8 @@ def meeting_out(m):
         "max_participants": m.max_participants,
         "show_on_screen": m.show_on_screen is not False,
         "created_at": m.created_at.isoformat() if m.created_at else None,
+        "url": f"{public_base()}/m/{m.room_name}",
         "local_url": f"{local_base()}/m/{m.room_name}",
-        "internet_url": f"https://{DEVICE_ID}.{ROOT_DOMAIN}/m/{m.room_name}",
     }
 
 
@@ -328,6 +358,14 @@ def list_users(user=Depends(current_user), db=Depends(get_db)):
 @app.post("/api/v1/users")
 def create_user(req: UserCreate, user=Depends(current_user), db=Depends(get_db)):
     require_admin(user)
+    req.username = req.username.strip().lower()
+    if not USERNAME_RE.match(req.username):
+        raise HTTPException(422, "Username must be 3–32 characters: lowercase letters, numbers, dots, hyphens or underscores.")
+    if len(req.password) < MIN_PASSWORD or req.password.lower() == req.username:
+        raise HTTPException(422, f"Password must be at least {MIN_PASSWORD} characters and not the username.")
+    if req.role not in ("host", "member"):
+        raise HTTPException(422, "Role must be host or member.")
+    req.display_name = req.display_name.strip()[:80] or req.username
     if db.query(User).filter_by(username=req.username).first():
         raise HTTPException(409, "username exists")
     if db.query(User).count() >= MAX_USERS:
@@ -379,9 +417,18 @@ def create_meeting(req: MeetingCreate, user=Depends(current_user), db=Depends(ge
     return out
 
 
+def can_moderate(user, m):
+    """The Client Admin moderates every meeting; a host only the meetings they created."""
+    return user.role == "admin" or (user.role == "host" and m.host_user_id == user.id)
+
+
 @app.get("/api/v1/meetings")
 def list_meetings(user=Depends(current_user), db=Depends(get_db)):
-    return [meeting_out(m) for m in db.query(Meeting).order_by(Meeting.id.desc()).all()]
+    names = {u.id: u.display_name or u.username for u in db.query(User).all()}
+    return [
+        {**meeting_out(m), "can_host": can_moderate(user, m), "host_name": names.get(m.host_user_id, "")}
+        for m in db.query(Meeting).order_by(Meeting.id.desc()).all()
+    ]
 
 
 @app.get("/api/v1/meetings/by-room/{room}")
@@ -399,9 +446,20 @@ def delete_meeting(meeting_id: int, user=Depends(current_user), db=Depends(get_d
     m = db.query(Meeting).filter_by(id=meeting_id).first()
     if not m:
         raise HTTPException(404, "not found")
+    room_name = m.room_name
     db.delete(m)
     db.commit()
+    close_room(room_name)
     return {"ok": True}
+
+
+def close_room(room_name):
+    """Disconnect everyone still in an ended or deleted meeting (best effort: LiveKit may be down,
+    and a room nobody joined does not exist there)."""
+    try:
+        delete_room(room_name)
+    except Exception:
+        pass
 
 
 @app.post("/api/v1/meetings/{meeting_id}/end")
@@ -413,6 +471,7 @@ def end_meeting(meeting_id: int, user=Depends(current_user), db=Depends(get_db))
     m.status = "ended"
     m.ended_at = datetime.now(timezone.utc)
     db.commit()
+    close_room(m.room_name)
     return {"ok": True}
 
 
@@ -510,19 +569,24 @@ def live_rooms():
 
 
 @app.get("/api/v1/meetings/now")
-def meetings_now(db=Depends(get_db)):
+def meetings_now(request: Request, k: str = "", db=Depends(get_db)):
     """Meetings in progress right now, for the page behind the QR on the device screen.
 
-    No login: it is only reachable on the office network, lists only meetings their host
-    left visible, and joining still needs the passcode and/or the host's lobby approval.
+    No login: on the office network anyone can see it; through the internet only with the key
+    from the room screen's QR. It lists only meetings their host left visible, and joining still
+    needs the passcode and/or the host's lobby approval.
     "In progress" means LiveKit has the room open with at least one participant.
     """
+    if from_internet(request) and not any(hmac.compare_digest(k, key) for key in room_keys()):
+        raise HTTPException(403, "Scan the QR code on the room screen to see the meetings in this room.")
     try:
         live = live_rooms()
     except Exception:
         raise HTTPException(503, "Meeting server unavailable")
+    # Host sign-in stays on the office network: the tunnel never serves /admin.
+    admin_url = local_base() + "/admin"
     if not live:
-        return {"meetings": []}
+        return {"meetings": [], "admin_url": admin_url}
     rows = (
         db.query(Meeting)
         .filter(Meeting.room_name.in_(list(live)), Meeting.status != "ended", Meeting.show_on_screen.isnot(False))
@@ -540,7 +604,44 @@ def meetings_now(db=Depends(get_db)):
             "lobby": bool(m.lobby),
         })
     out.sort(key=lambda x: x["started_at"] or "")
-    return {"meetings": out}
+    return {"meetings": out, "admin_url": admin_url}
+
+
+PASSCODE_FAILURES = {}  # room -> recent failure times; meeting links can be opened from the internet
+PASSCODE_MAX_FAILURES, PASSCODE_WINDOW = 10, 600
+_passcode_lock = threading.Lock()
+
+
+def passcode_blocked(room, failed=False):
+    with _passcode_lock:
+        now = time.time()
+        recent = [t for t in PASSCODE_FAILURES.get(room, []) if now - t < PASSCODE_WINDOW]
+        if failed:
+            recent.append(now)
+        if recent:
+            PASSCODE_FAILURES[room] = recent
+        else:
+            PASSCODE_FAILURES.pop(room, None)
+        return len(recent) >= PASSCODE_MAX_FAILURES
+
+
+@app.get("/api/v1/meeting-info")
+def meeting_info(room: str, db=Depends(get_db)):
+    """What a guest's join page shows before joining: the meeting's title and what joining takes.
+    Only for people who already have the link (the room name is the secret part of it)."""
+    m = db.query(Meeting).filter_by(room_name=room).first()
+    if not m or m.status == "ended":
+        raise HTTPException(404, "This meeting link is not valid or the meeting has ended.")
+    org = db.query(OrgSettings).first()
+    return {
+        "title": m.title,
+        "org_name": (org.org_name if org else "") or "",
+        "scheduled_at": m.scheduled_at.isoformat() if m.scheduled_at else None,
+        "duration_minutes": m.duration_minutes,
+        "has_passcode": bool(m.passcode_hash),
+        "lobby": bool(m.lobby),
+        "locked": bool(m.locked),
+    }
 
 
 @app.post("/api/v1/join")
@@ -550,8 +651,12 @@ def join(req: JoinRequest, db=Depends(get_db)):
         raise HTTPException(404, "unknown room")
     if m.locked:
         raise HTTPException(403, "room locked")
-    if m.passcode_hash and not (req.passcode and verify_password(req.passcode, m.passcode_hash)):
-        raise HTTPException(401, "invalid passcode")
+    if m.passcode_hash:
+        if passcode_blocked(m.room_name):
+            raise HTTPException(429, "Too many wrong passcodes. Try again in a few minutes.")
+        if not (req.passcode and verify_password(req.passcode, m.passcode_hash)):
+            passcode_blocked(m.room_name, failed=True)
+            raise HTTPException(401, "invalid passcode")
     if m.lobby:
         existing = db.query(LobbyRequest).filter_by(room_name=m.room_name, identity=req.identity).first()
         if not existing:
@@ -579,13 +684,20 @@ def lobby_status(room: str, identity: str, db=Depends(get_db)):
 
 
 @app.post("/api/v1/token")
-def host_token(req: HostTokenRequest, user=Depends(current_user), db=Depends(get_db)):
+def signed_in_token(req: HostTokenRequest, user=Depends(current_user), db=Depends(get_db)):
+    """Joining from the console. The meeting's host (or the Client Admin) joins as moderator; any
+    other signed-in account (staff) joins straight in, without passcode or waiting room, but
+    cannot moderate."""
     m = db.query(Meeting).filter_by(room_name=req.room).first()
     if not m:
         raise HTTPException(404, "unknown room")
-    if user.role not in ("admin", "host"):
-        raise HTTPException(403, "host only")
-    return issue_livekit_token(req.identity, m.room_name, room_admin=True)
+    if m.status == "ended":
+        raise HTTPException(410, "This meeting has ended.")
+    moderator = can_moderate(user, m)
+    if m.locked and not moderator:
+        raise HTTPException(403, "room locked")
+    identity = req.identity.strip()[:60] or user.display_name or user.username
+    return {**issue_livekit_token(identity, m.room_name, room_admin=moderator), "host": moderator}
 
 
 def issue_livekit_token(identity, room, room_admin):
@@ -596,7 +708,7 @@ def issue_livekit_token(identity, room, room_admin):
         "sub": identity,
         "nbf": now,
         "exp": now + 3600,
-        "metadata": '{"room":"%s"}' % room,
+        "metadata": json.dumps({"room": room, "host": bool(room_admin)}),
         "video": {
             "roomJoin": True,
             "room": room,

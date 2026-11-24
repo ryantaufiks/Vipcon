@@ -12,7 +12,7 @@ apt-get install -y -qq python3-pil python3-numpy python3-qrcode python3-evdev fo
 
 echo "== kiosk files"
 install -d -m 755 /opt/appliance/kiosk /etc/appliance/kiosk
-install -m 644 "$HERE/kiosk.py" /opt/appliance/kiosk/kiosk.py
+install -m 644 "$HERE/kiosk.py" "$HERE/vipcon-logo.png" /opt/appliance/kiosk/
 install -m 755 "$HERE/splash.sh" /opt/appliance/kiosk/splash.sh
 install -m 644 "$HERE/90-vipcon-splash.rules" /etc/udev/rules.d/90-vipcon-splash.rules
 udevadm control --reload-rules 2>/dev/null || true
