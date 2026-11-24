@@ -16,6 +16,7 @@ function since(iso) {
 export default function Now({ theme, onToggleTheme }) {
   const [meetings, setMeetings] = useState(null) // null = first load
   const [error, setError] = useState('')
+  const [adminUrl, setAdminUrl] = useState('')
   const [, tick] = useState(0)
 
   useEffect(() => {
@@ -26,6 +27,7 @@ export default function Now({ theme, onToggleTheme }) {
         const data = await meetingsNow(new URLSearchParams(window.location.search).get('k'))
         if (!alive) return
         setMeetings(data.meetings || [])
+        setAdminUrl(data.admin_url || '')
         setError('')
       } catch (err) {
         if (alive) setError(err.message)
@@ -73,6 +75,11 @@ export default function Now({ theme, onToggleTheme }) {
               </li>
             ))}
           </ul>
+        )}
+        {adminUrl && (
+          <p className="now-host dash-meta">
+            Host? <a href={adminUrl}>Sign in</a> (office Wi‑Fi only)
+          </p>
         )}
       </div>
     </div>

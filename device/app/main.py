@@ -553,8 +553,10 @@ def meetings_now(request: Request, k: str = "", db=Depends(get_db)):
         live = live_rooms()
     except Exception:
         raise HTTPException(503, "Meeting server unavailable")
+    # Host sign-in stays on the office network: the tunnel never serves /admin.
+    admin_url = local_base() + "/admin"
     if not live:
-        return {"meetings": []}
+        return {"meetings": [], "admin_url": admin_url}
     rows = (
         db.query(Meeting)
         .filter(Meeting.room_name.in_(list(live)), Meeting.status != "ended", Meeting.show_on_screen.isnot(False))
@@ -572,7 +574,7 @@ def meetings_now(request: Request, k: str = "", db=Depends(get_db)):
             "lobby": bool(m.lobby),
         })
     out.sort(key=lambda x: x["started_at"] or "")
-    return {"meetings": out}
+    return {"meetings": out, "admin_url": admin_url}
 
 
 PASSCODE_FAILURES = {}  # room -> recent failure times; meeting links can be opened from the internet

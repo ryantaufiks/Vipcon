@@ -106,6 +106,12 @@ def test_internet_requests_need_the_room_key_for_meetings_now(client, tmp_path, 
     for key in (today, yesterday):
         r = client.get(f"/api/v1/meetings/now?k={key}", headers=public)
         assert r.status_code == 200 and [m["title"] for m in r.json()["meetings"]] == ["Legacy"]
+    # The host sign-in link points at the office-network name, never the public one.
+    site = tmp_path / "site_fqdn"
+    site.write_text("client1.lan.example.com")
+    monkeypatch.setattr(main, "SITE_FILE", str(site))
+    r = client.get(f"/api/v1/meetings/now?k={today}", headers=public)
+    assert r.json()["admin_url"] == "https://client1.lan.example.com/admin"
     from datetime import datetime, timedelta, timezone
     stale = main.room_keys(datetime.now(timezone.utc) - timedelta(days=2))[0]
     assert client.get(f"/api/v1/meetings/now?k={stale}", headers=public).status_code == 403
