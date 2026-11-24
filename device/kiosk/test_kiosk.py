@@ -113,3 +113,20 @@ def test_room_key_matches_the_device_app():
 
     expected = hmac.new(b"seed", f"now:{date(1970, 1, 2).isoformat()}".encode(), hashlib.sha256).hexdigest()[:20]
     assert kiosk.room_key("seed", 86400 + 5) == expected
+
+
+def test_brand_screen_uses_the_client_logo_or_vipcon(tmp_path):
+    st = dict(BASE, claimed=True, license_status="active")
+    r = kiosk.Renderer(480, 320)
+    r.set_state(st)
+    assert r.accent == kiosk.GOLD  # no client logo: the VIPCON logo and its gold
+    assert r.screensaver(0.5).size == r.splash("Starting…").size == (480, 320)
+    red = tmp_path / "logo.png"
+    kiosk.Image.new("RGBA", (200, 60), (220, 20, 30, 255)).save(red)
+    r = kiosk.Renderer(480, 320)
+    r.set_state(dict(st, logo_path=str(red), logo_mtime=1))
+    assert r.accent[0] > 180 and r.accent[1] < 80  # the client's own colour
+    y0, y1 = r.saver_band()
+    a, b = r.screensaver(0.1), r.screensaver(0.6)
+    diff = kiosk.np.argwhere(kiosk.np.asarray(a) != kiosk.np.asarray(b))
+    assert diff.size and diff[:, 0].min() >= y0 and diff[:, 0].max() < y1  # only the band animates
