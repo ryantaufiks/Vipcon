@@ -47,12 +47,13 @@ const M = {
   bezel: new THREE.MeshPhysicalMaterial({color: 0x2b2d30, roughness: 0.48, metalness: 0.1, clearcoat: 0.3}),
   glass: new THREE.MeshPhysicalMaterial({color: 0x030304, roughness: 0.04, metalness: 0, clearcoat: 1})
 };
-// hotspots in model space (glTF millimetres): point, camera direction hint, distance
+// hotspots in model space (glTF millimetres): point the camera looks at, camera direction hint, distance,
+// and where the marker sits: on an edge next to the feature, so it never covers the screen, vents or ports
 const HOT = [
-  {k: 'DISPLAY', t: '3.5″ touch display', p: 'An IPS touch screen in an armoured bezel. Tap to start a meeting, no keyboard needed.', at: [42.5, 34, -28], dir: [0, 1.25, 0.55], d: 0.85},
+  {k: 'DISPLAY', t: '3.5″ touch display', p: 'An IPS touch screen in an armoured bezel. Tap to start a meeting, no keyboard needed.', at: [42.5, 34, -28], mark: [0, 35, -58], dir: [0, 1.25, 0.55], d: 0.85},
   {k: 'ARMOUR', t: 'Rugged corner bumpers', p: 'Raised 45° bumpers protect every corner on a busy boardroom table.', at: [-7, 20, -64], dir: null, d: 0.62},
-  {k: 'AIRFLOW', t: 'Silent passive cooling', p: 'Cool air enters below and leaves through angled side vents. No fan, no noise.', at: [61, 22, -63], dir: null, d: 0.62},
-  {k: 'PORTS', t: 'Only the ports you need', p: 'Gigabit LAN, USB-C power and dual micro-HDMI. Every other port is sealed.', at: [92, 14, -45.7], dir: null, d: 0.62}
+  {k: 'AIRFLOW', t: 'Silent passive cooling', p: 'Cool air enters below and leaves through angled side vents. No fan, no noise.', at: [61, 22, -63], mark: [61, 6, -64.2], dir: null, d: 0.62},
+  {k: 'PORTS', t: 'Only the ports you need', p: 'Gigabit LAN, USB-C power and dual micro-HDMI. Every other port is sealed.', at: [92, 14, -45.7], mark: [92.8, 28, -45.7], dir: null, d: 0.62}
 ];
 let center = new THREE.Vector3(), ready = false;
 const tex = new THREE.TextureLoader().load('/static/site/vipcon_screen.jpg', t => { t.colorSpace = THREE.SRGBColorSpace; t.flipY = false; t.anisotropy = 8; });
@@ -81,9 +82,10 @@ function onModel(g) {
   center = new THREE.Box3().setFromObject(pivot).getCenter(new THREE.Vector3());
   HOT.forEach((h, i) => {
     h.w = inner.localToWorld(new THREE.Vector3(...h.at));
+    h.m = inner.localToWorld(new THREE.Vector3(...(h.mark || h.at)));
     const dir = h.dir ? new THREE.Vector3(...h.dir) : h.w.clone().sub(center).setY(0).normalize().add(new THREE.Vector3(0, 0.55, 0));
     h.cam = h.w.clone().add(dir.normalize().multiplyScalar(h.d));
-    const b = document.createElement('button'); b.className = 'hot glass'; b.type = 'button';
+    const b = document.createElement('button'); b.className = 'hot'; b.type = 'button';
     b.innerHTML = '<i>+</i><span></span>'; b.querySelector('span').textContent = h.t;
     b.setAttribute('aria-label', 'Zoom to ' + h.t);
     b.addEventListener('click', e => { e.stopPropagation(); stopTour(); focus(i); });
@@ -163,13 +165,16 @@ renderer.setAnimationLoop(() => {
   renderer.render(scene, camera);
   if (ready) {
     const r = canvas.getBoundingClientRect();
-    HOT.forEach(h => {
-      v.copy(h.w).project(camera);
+    // dim the markers while the device turns on its own; zoomed in, show only the current one
+    hotsEl.classList.toggle('dim', controls.autoRotate && !anim && focused < 0);
+    HOT.forEach((h, i) => {
+      v.copy(h.m).project(camera);
       const x = (v.x * .5 + .5) * r.width, y = (-v.y * .5 + .5) * r.height;
-      const facing = camera.position.clone().sub(h.w).dot(h.w.clone().sub(center)) > -0.02;
-      h.el.style.transform = `translate(${x - 19}px,${y - 19}px)`;
+      const facing = camera.position.clone().sub(h.m).dot(h.m.clone().sub(center)) > -0.02;
+      h.el.style.transform = `translate(${x - 15}px,${y - 15}px)`;
       h.el.style.visibility = v.z < 1 ? 'visible' : 'hidden';
-      h.el.classList.toggle('back', !facing && focused !== HOT.indexOf(h));
+      h.el.classList.toggle('back', !facing && focused !== i);
+      h.el.classList.toggle('hide', focused >= 0 && focused !== i);
     });
   }
 });
