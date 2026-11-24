@@ -330,7 +330,10 @@ def vignette(w, h, centre=(24, 24, 28), edge=(4, 4, 6)):
     d = np.sqrt(((x - w / 2) / (w * 0.62)) ** 2 + ((y - h * 0.46) / (h * 0.62)) ** 2)
     t = np.clip(d, 0, 1)[..., None] ** 1.3
     img = np.array(centre, dtype=np.float32) * (1 - t) + np.array(edge, dtype=np.float32) * t
-    return Image.fromarray(img.astype(np.uint8), "RGB")
+    # The panel is 16-bit (5/6/5): a smooth dark gradient shows rings there. Fixed noise of about
+    # one 5-bit step dithers them away (seeded, so every frame and the cached splash agree).
+    img += np.random.default_rng(5).uniform(-4.5, 4.5, img.shape).astype(np.float32)
+    return Image.fromarray(np.clip(img, 0, 255).astype(np.uint8), "RGB")
 
 
 def load_logo(path, max_w, max_h):
