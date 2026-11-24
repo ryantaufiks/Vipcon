@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Point everything that embeds the LAN address at the current one: the local TLS certificate,
-# LiveKit's node IP (what browsers send media to), and the Caddy/dnsmasq config. Called after
+# LiveKit's node IP (what browsers send media to), and the Caddy config. Called after
 # the appliance joins a network (netsetup) and by the NetworkManager dispatcher on IP changes.
 set -euo pipefail
 ETC=/etc/appliance

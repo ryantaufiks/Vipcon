@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Render the Caddyfile and dnsmasq config for this device from the templates, and make sure
-# dnsmasq is installed. Called by first-boot.sh and by install-appliance.sh on a refresh.
+# Render the Caddyfile for this device from its template (and retire the old dnsmasq).
+# Called by first-boot.sh, apply-lan-ip.sh and by install-appliance.sh on a refresh.
 #   render-config.sh DEVICE_ID ROOT_DOMAIN HOSTNAME LAN_IP
 set -euo pipefail
 DEVICE_ID="$1"; ROOT_DOMAIN="$2"; HOST="$3"; LAN_IP="$4"
@@ -17,12 +17,9 @@ render() {
         "$1"
 }
 render "$TPL/Caddyfile.local.tpl" > "$ETC/Caddyfile"
-render "$TPL/dnsmasq.conf.tpl" > /etc/dnsmasq.conf
-
-# dnsmasq-base (pulled in by NetworkManager) ships the binary but not the service.
-if [ "$(dpkg-query -W -f='${Status}' dnsmasq 2>/dev/null)" != "install ok installed" ]; then
-    DEBIAN_FRONTEND=noninteractive dpkg --configure -a || true   # finish an interrupted install
-    apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq dnsmasq >/dev/null
+# dnsmasq used to answer <host>.lan on the office network; the device's names now come from
+# public DNS (<site>.lan.<root>, Let's Encrypt). Older installs: stop it (it answered DNS for the
+# whole LAN on port 53).
+if systemctl list-unit-files --no-legend dnsmasq.service 2>/dev/null | grep -q .; then
+    systemctl disable --now dnsmasq >/dev/null 2>&1 || true
 fi
-systemctl enable dnsmasq >/dev/null 2>&1 || true
-systemctl restart dnsmasq || echo "render-config: dnsmasq did not start (see journalctl -u dnsmasq)" >&2

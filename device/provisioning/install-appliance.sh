@@ -29,7 +29,7 @@ for dir in app agent; do
     cp -a "$SRC/$dir" "$OPT/$dir"
     find "$OPT/$dir" -name __pycache__ -prune -exec rm -rf {} +
 done
-install -m 644 "$SRC/livekit/livekit.yaml.tpl" "$SRC/caddy/Caddyfile.local.tpl" "$SRC/dnsmasq/dnsmasq.conf.tpl" "$OPT/templates/"
+install -m 644 "$SRC/livekit/livekit.yaml.tpl" "$SRC/caddy/Caddyfile.local.tpl" "$OPT/templates/"
 install -m 755 "$SRC/provisioning/gen-local-ca.sh" "$SRC/provisioning/gen-ca-artifacts.sh" \
     "$SRC/provisioning/render-config.sh" "$OPT/templates/"
 install -m 755 "$SRC/provisioning/first-boot.sh" "$SRC/provisioning/factory-reset.sh" "$OPT/"
@@ -72,6 +72,10 @@ else
         chmod 600 "$ETC/device_secret" "$ETC/claim_code" 2>/dev/null || true   # older installs left these 644
         LAN_IP="${LAN_IP:-$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for (i = 1; i < NF; i++) if ($i == "src") print $(i + 1)}')}"
         "$OPT/templates/render-config.sh" "$(cat "$ETC/device_id")" "$(cat "$ETC/root_domain")" "$(hostname)" "$LAN_IP"
+        # Older livekit.yaml: API on every interface and the Docker bridge offered to browsers.
+        sed -i 's/^  - ""$/  - "127.0.0.1"/' "$ETC/livekit.yaml"
+        grep -q '^  interfaces:' "$ETC/livekit.yaml" ||
+            sed -i 's/^  tcp_port:/  interfaces:\n    excludes:\n      - docker0\n  tcp_port:/' "$ETC/livekit.yaml"
         (cd "$OPT" && docker compose up -d --force-recreate)
     else
         echo "== device not provisioned yet; pass a device.json to provision it"

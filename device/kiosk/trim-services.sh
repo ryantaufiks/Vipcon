@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Turn off everything a stock Raspberry Pi OS image runs that a Vipcon appliance does not need.
 # Kept: docker/containerd, tailscaled, ssh, NetworkManager/wpa_supplicant (Wi-Fi), timesyncd,
-# cron, journald, vipcon-kiosk.  Safe to run more than once.  Run as root.
+# cron, journald, vipcon-kiosk, vipcon-netsetup.  Safe to run more than once.  Run as root.
 set -uo pipefail
 [ "$(id -u)" = 0 ] || { echo "run as root" >&2; exit 1; }
 
@@ -29,6 +29,19 @@ HOOK=/etc/apt/apt.conf.d/20packagekit
 if [ -e "$HOOK" ] && ! dpkg-divert --list "$HOOK" | grep -q .; then
     dpkg-divert --quiet --local --rename --divert "$HOOK.disabled" "$HOOK" && echo "  off: packagekit apt hook"
 fi
+
+echo "== timers an appliance does not need (updates arrive with Vipcon deploys)"
+off man-db.timer apt-daily.timer apt-daily-upgrade.timer
+
+echo "== desktop audio for login sessions (the kiosk plays no sound; no desktop runs)"
+for unit in pipewire.socket pipewire.service pipewire-pulse.socket pipewire-pulse.service \
+            wireplumber.service filter-chain.service mpris-proxy.service; do
+    if systemctl --global list-unit-files --no-legend "$unit" 2>/dev/null | grep -q .; then
+        systemctl --global disable "$unit" >/dev/null 2>&1 || true
+        systemctl --global mask "$unit" >/dev/null 2>&1 || true
+        echo "  off (user sessions): $unit"
+    fi
+done
 
 echo "== cloud-init (first-boot settings from Raspberry Pi Imager are already applied)"
 mkdir -p /etc/cloud && touch /etc/cloud/cloud-init.disabled && echo "  off: cloud-init"

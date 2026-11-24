@@ -14,7 +14,7 @@ Saved networks are retried every RETRY_KNOWN seconds while in setup, so a router
 rebooting brings the appliance straight back. Ethernet coming up ends setup immediately.
 Only someone who can read the device's screen can get on the hotspot.
 
-Runs as root (NetworkManager, port 80, stopping Caddy/dnsmasq while the hotspot is up).
+Runs as root (NetworkManager, port 80, stopping Caddy while the hotspot is up).
 """
 
 import html
@@ -197,9 +197,8 @@ def connect(iface, ssid, password):
 
 
 def appliance_services(start):
-    """Caddy (port 80) and our dnsmasq (port 53) step aside while the hotspot runs."""
+    """Caddy (port 80) steps aside while the hotspot runs."""
     verb = "start" if start else "stop"
-    run(["systemctl", verb, "dnsmasq"])
     run(["docker", verb, CADDY_CONTAINER], timeout=60)
 
 

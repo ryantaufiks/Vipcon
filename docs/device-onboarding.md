@@ -82,7 +82,7 @@ sudo ~/vipcon-appliance/device/provisioning/install-appliance.sh ~/vipcon-applia
 The first run takes several minutes, mostly building the container images. It:
 
 - turns off services the appliance doesn't need;
-- installs the stack (LiveKit, the device app, Caddy, dnsmasq, agent) to `/opt/appliance`;
+- installs the stack (LiveKit, the device app, Caddy, agent) to `/opt/appliance`;
 - installs network setup (Wi-Fi hotspot when offline), the LCD kiosk and the boot splash;
 - provisions the device from `device.json`. Secrets go to `/etc/appliance` as root-only files,
   and every copy of `device.json` outside `/etc/appliance` is shredded.
@@ -148,3 +148,19 @@ minute or two of reaching the internet.
 - **Full factory reset** (removes identity, data, certificates and licence; the screen shows
   "Device not ready"): `sudo /opt/appliance/factory-reset.sh --yes`. Provision again with a
   `device.json` from a newly registered device.
+
+## Ports on the device
+
+| Port | Where | What |
+|---|---|---|
+| 80/tcp | LAN | Caddy, redirects to HTTPS |
+| 443/tcp (+ 443/udp HTTP/3) | LAN | Caddy: web app, `/api`, `/rtc` signalling |
+| 7881/tcp | LAN | LiveKit media over TCP (ICE-TCP) |
+| 7882/udp | LAN | LiveKit media |
+| 22/tcp | LAN | SSH (maintenance) |
+| 41641/udp | — | Tailscale (maintenance, if installed) |
+| 8000/tcp | localhost | Device app (FastAPI), only through Caddy |
+| 7880/tcp | localhost | LiveKit API and signalling, only through Caddy |
+| 8081/tcp | localhost | Caddy listener the Cloudflare tunnel delivers to |
+| 2019/tcp | localhost | Caddy admin API (the agent reloads certificates) |
+| 20241/tcp | localhost | cloudflared metrics (`/ready`) |

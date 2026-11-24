@@ -50,7 +50,7 @@ your control.
                        │    └─ /rtc*      → LiveKit (signaling)    │
                        │                                          │
                        │  LiveKit server  → media UDP/TCP :7881/82 │
-                       │  dnsmasq         → local DNS (host.lan)   │
+                       │  cloudflared     → tunnel (internet link) │
                        │  agent           → heartbeat + license    │
                        └──────────────────────────────────────────┘
 ```
@@ -81,7 +81,7 @@ your control.
 | Control plane | FastAPI + SQLAlchemy (Postgres/SQLite) |
 | Web UI | React 19 + Vite + livekit-client |
 | Reverse proxy / TLS | Caddy (private CA + Cloudflare DNS plugin) |
-| Local DNS | dnsmasq |
+| Device names | Public DNS (Cloudflare) + Let's Encrypt |
 | Provisioning | systemd + first-boot script |
 
 ## Repository layout
@@ -94,7 +94,6 @@ device/
   web/           React meeting UI + dashboard
   livekit/       LiveKit config template
   caddy/         Caddyfile templates + Dockerfile
-  dnsmasq/       Local DNS template
   provisioning/  First-boot + CA generation scripts
   systemd/       Appliance service
 docs/            Documentation + screenshots

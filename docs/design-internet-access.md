@@ -45,7 +45,7 @@ site router returned nothing).
   Labels used by the site (`www`, `console`, `api`, …) are already reserved.
 - The control plane creates a **named tunnel per device** through the Cloudflare API, a proxied
   CNAME `<name>.<root>` → `<tunnel-id>.cfargotunnel.com`, and an ingress rule pointing to the
-  Pi's Caddy (`http://127.0.0.1:8080`, a plain-HTTP listener used only by the tunnel).
+  Pi's Caddy (`http://127.0.0.1:8081`, a localhost-only plain-HTTP listener used only by the tunnel).
   Renaming the Site ID moves the CNAME, like the `.lan` A record today.
 - The device fetches its tunnel token over the signed device API (never in `device.json`) and the
   agent runs `cloudflared` as a new compose service. Heartbeat reports a real `tunnel_ok`.

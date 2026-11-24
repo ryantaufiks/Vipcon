@@ -23,10 +23,6 @@
 	import vipcon_routes
 }
 
-:8080 {
-	import vipcon_routes
-}
-
 # Internet access: requests arriving through the device's Cloudflare tunnel (cloudflared connects
 # to this localhost-only listener). Only meeting pages and the guest APIs are reachable; admin,
 # claim and account APIs stay on the office network.
