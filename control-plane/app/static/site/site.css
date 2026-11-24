@@ -132,12 +132,6 @@ dd{font-weight:500}
 .dimfig .lab{fill:#fff;font:700 24px var(--display);text-anchor:middle}
 @media(max-width:480px){dl{grid-template-columns:minmax(0,1fr)}dt{padding-bottom:0;border:0}}
 
-.modes{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px;margin-top:40px}
-.mode{padding:30px 28px}
-.mode b{font:800 13px var(--display);letter-spacing:.18em;color:var(--gold)}
-.mode h3{font-size:24px;margin:10px 0}
-.mode p{margin:0;color:var(--mute)}
-@media(max-width:700px){.modes{grid-template-columns:minmax(0,1fr)}}
 
 .final{text-align:center;background:radial-gradient(60% 90% at 50% 100%,#2a1d08 0%,var(--bg) 70%)}
 .final h2{font-size:clamp(32px,4vw,54px)}
@@ -172,13 +166,11 @@ footer img{height:20px}
 .assurances li{color:var(--mute);font-size:15px}
 .assurances b{display:block;color:var(--ink);font:700 16px var(--display);margin-bottom:6px}
 @media(max-width:860px){.ledger,.assurances{grid-template-columns:minmax(0,1fr)}}
-.comply .cards{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px;margin-top:40px}
 .comply article{padding:30px 28px}
 .comply article svg{width:36px;height:36px;stroke:var(--gold);fill:none;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
 .comply h3{font-size:22px;margin:14px 0 8px}
 .comply article>p{margin:0 0 16px;color:var(--mute)}
 .comply b{color:var(--ink)}
-@media(max-width:760px){.comply .cards{grid-template-columns:minmax(0,1fr)}}
 .uses .grid4 div{padding:26px 24px}
 .uses h3{font-size:19px;margin:0 0 8px}
 .uses p{margin:0;color:var(--mute);font-size:15px}
@@ -189,3 +181,22 @@ footer img{height:20px}
 .notfound{min-height:100svh;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:22px;text-align:center;padding:24px;
   background:radial-gradient(60% 60% at 50% 100%,#2a1d08 0%,var(--bg) 70%)}
 .notfound h1{font-size:clamp(30px,4vw,48px)}
+
+/* device: big numbers instead of a spec sheet; the full specs fold out */
+.stats{list-style:none;margin:40px 0 0;padding:0;display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:18px}
+.stats li{padding:26px 24px;border-top:1px solid rgba(242,179,61,.5)}
+.stats b{display:block;font:800 clamp(44px,5vw,64px)/1 var(--display);background:linear-gradient(120deg,var(--gold2),var(--gold) 60%,#c98a1a);-webkit-background-clip:text;background-clip:text;color:transparent}
+.stats small{font-size:.42em;font-weight:700}
+.stats span{display:block;margin-top:10px;color:var(--mute);font-size:15px}
+@media(max-width:860px){.stats{grid-template-columns:repeat(2,minmax(0,1fr))}}
+.fullspec{margin-top:36px;border-top:1px solid var(--line)}
+.fullspec summary{cursor:pointer;list-style:none;display:inline-flex;align-items:center;gap:10px;margin-top:22px;font:600 15px var(--sans);color:var(--gold2)}
+.fullspec summary::-webkit-details-marker{display:none}
+.fullspec summary::after{content:"";width:8px;height:8px;border-right:2px solid currentColor;border-bottom:2px solid currentColor;transform:translateY(-2px) rotate(45deg);transition:transform .25s}
+.fullspec[open] summary::after{transform:translateY(2px) rotate(-135deg)}
+.fullspec summary:focus-visible{outline:2px solid var(--gold2);outline-offset:4px;border-radius:4px}
+/* compliance: one wide card, text left and points right */
+.comply .single{margin-top:40px;padding:32px 30px;display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.3fr);gap:clamp(20px,4vw,56px);align-items:start}
+.comply .single h3{font-size:22px;margin:14px 0 8px}
+.comply .single div>p{margin:0;color:var(--mute)}
+@media(max-width:760px){.comply .single{grid-template-columns:minmax(0,1fr)}}
