@@ -22,7 +22,8 @@ export default function Now({ theme, onToggleTheme }) {
     let alive = true
     async function load() {
       try {
-        const data = await meetingsNow()
+        // The room screen's QR carries a key; over the internet the list opens only with it.
+        const data = await meetingsNow(new URLSearchParams(window.location.search).get('k'))
         if (!alive) return
         setMeetings(data.meetings || [])
         setError('')

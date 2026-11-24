@@ -18,6 +18,7 @@
     <label>Max concurrent meetings <input type="number" name="max_concurrent_meetings" min="1" max="50" value="{{ plan.max_concurrent_meetings if plan else 5 }}"></label>
   </div>
   <label class="check"><input type="checkbox" name="e2ee_default" {{ 'checked' if plan and (plan.features or {}).get('e2ee_default') }}> E2EE on by default</label>
+  <label class="check"><input type="checkbox" name="internet_access" {{ 'checked' if plan and (plan.features or {}).get('internet_access') }}> Internet access (one public meeting link per device, guests can join from anywhere)</label>
   <label class="check"><input type="checkbox" name="active" {{ 'checked' if not plan or plan.active }}> Active plan (can be chosen for new devices)</label>
   <button class="primary">Save</button>
 </form>

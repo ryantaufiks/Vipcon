@@ -108,6 +108,6 @@ export async function claimDevice(data) {
   return api('POST', '/claim', data)
 }
 
-export async function meetingsNow() {
-  return api('GET', '/meetings/now')
+export async function meetingsNow(key) {
+  return api('GET', '/meetings/now' + (key ? '?k=' + encodeURIComponent(key) : ''))
 }

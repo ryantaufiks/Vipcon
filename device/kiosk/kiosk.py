@@ -20,6 +20,8 @@ http://127.0.0.1:8000/healthz on the device itself; the control plane state come
 
 import argparse
 import glob
+import hashlib
+import hmac
 import json
 import math
 import os
@@ -139,6 +141,8 @@ def load_state():
         "device_id": read(os.path.join(ETC, "device_id")),
         "root_domain": read(os.path.join(ETC, "root_domain")),
         "site_fqdn": read(os.path.join(ETC, "site_fqdn")),
+        "public_fqdn": read(os.path.join(ETC, "public_fqdn")),
+        "room_key": room_key(read(os.path.join(ETC, "room_seed"))),
         "claim_code": read(os.path.join(ETC, "claim_code")),
         "claimed": claimed,
         "license_status": remote.get("license_status"),
@@ -164,8 +168,20 @@ def local_link(st):
     return f"https://{st.get('lan_ip') or 'localhost'}"
 
 
+def room_key(seed, at=None):
+    """Today's key for the room QR (UTC); the device app accepts it and yesterday's. Through the
+    internet, the list of meetings in progress opens only with it."""
+    if not seed:
+        return ""
+    day = time.strftime("%Y-%m-%d", time.gmtime(at))
+    return hmac.new(seed.encode(), f"now:{day}".encode(), hashlib.sha256).hexdigest()[:20]
+
+
 def now_link(st):
-    """The QR on a ready device opens the list of meetings in progress."""
+    """The QR on a ready device opens the list of meetings in progress: through the public name
+    while the device has internet access (it works on any network), else the office-network link."""
+    if st.get("public_fqdn") and st.get("room_key"):
+        return f"https://{st['public_fqdn']}/now?k={st['room_key']}"
     return local_link(st) + "/now"
 
 

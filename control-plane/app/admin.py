@@ -1,5 +1,6 @@
 """Superadmin web UI (server-rendered, no JavaScript required)."""
 
+import logging
 import time
 from collections import defaultdict, deque
 from datetime import date, timedelta
@@ -43,10 +44,17 @@ from services import (
     set_logo,
     set_tagline,
     device_fqdn,
+    device_plan,
+    internet_allowed,
+    plan_has_internet,
+    public_fqdn,
+    reconcile_tunnel,
     sync_cert_wanted,
     tls_bundle,
 )
 from web_common import check_csrf, client_ip, current_admin, redirect, render
+
+log = logging.getLogger("control-plane.admin")
 
 router = APIRouter()
 
@@ -264,7 +272,8 @@ def apply_plan_form(plan, form):
     plan.max_users = integer(form, "max_users", 20, 1, 1000)
     plan.max_concurrent_meetings = integer(form, "max_concurrent_meetings", 5, 1, 50)
     plan.connectivity_mode = choice(form, "connectivity_mode", CONNECTIVITY_MODES)
-    plan.features = {"e2ee_default": form.get("e2ee_default") == "on"}
+    plan.features = {"e2ee_default": form.get("e2ee_default") == "on",
+                     "internet_access": form.get("internet_access") == "on"}
     plan.active = form.get("active") == "on"
 
 
@@ -489,6 +498,10 @@ def device_detail(device_id: str, request: Request, admin=Depends(current_admin)
         site_fqdn=device_fqdn(device),
         tls=tls_bundle(device_fqdn(device)),
         dns_enabled=cloudflare.enabled(),
+        public_fqdn=public_fqdn(device),
+        public_taken=public_name_taken(db, device),
+        plan_internet=plan_has_internet(device_plan(db, device)),
+        internet_allowed=internet_allowed(db, device),
         **device_form_context(db),
     )
 
@@ -525,9 +538,11 @@ async def device_update(device_id: str, request: Request, admin=Depends(current_
     after = {"client_id": device.client_id, "plan_id": device.plan_id, "mode": device.connectivity_mode,
              "site_id": device.site_id}
     audit(db, admin.email, "device.updated", device.device_id, client_ip(request), before=before, after=after)
+    problems = []
+    reconcile_tunnel(db, device, log, problems)  # a new Site ID moves the public name; a new plan may drop it
     db.commit()
     sync_cert_wanted(db)
-    return redirect(f"/devices/{device.device_id}", "Device saved.")
+    return redirect(f"/devices/{device.device_id}", " ".join(["Device saved."] + problems))
 
 
 STATUS_ACTIONS = {
@@ -550,9 +565,45 @@ async def device_status(device_id: str, request: Request, admin=Depends(current_
     before = device.status
     device.status = target or ("claimed" if device.claimed_at else "provisioned")
     audit(db, admin.email, f"device.{action}", device.device_id, client_ip(request), before=before, after=device.status)
+    reconcile_tunnel(db, device, log)  # suspended or revoked devices lose their public name
     db.commit()
     sync_cert_wanted(db)  # a revoked device gets no new certificate
     return redirect(f"/devices/{device.device_id}", f"Device status: {device.status}.")
+
+
+def public_name_taken(db, device):
+    """The device should have its public name but doesn't: is someone else's DNS record in the way?"""
+    want = public_fqdn(device)
+    if not cloudflare.enabled() or device.public_dns == want or not internet_allowed(db, device):
+        return False
+    try:
+        return bool(cloudflare.foreign_records(want))
+    except cloudflare.CloudflareError:
+        return False
+
+
+@router.post("/devices/{device_id}/internet")
+async def device_internet(device_id: str, request: Request, admin=Depends(current_admin), db=Depends(get_db)):
+    form = await check_csrf(request)
+    device = find_device(db, device_id)
+    enabled = form.get("enabled") == "on"
+    device.internet_enabled = enabled
+    audit(db, admin.email, "device.internet_" + ("enabled" if enabled else "disabled"), device.device_id,
+          client_ip(request))
+    problems = []
+    ready = reconcile_tunnel(db, device, log, problems)
+    db.commit()
+    if enabled and problems:
+        note = "Internet access switched on, but " + problems[0]
+    elif enabled and not internet_allowed(db, device):
+        note = "Internet access switched on; it starts once the device has an active contract on a plan that includes it."
+    elif enabled and not ready:
+        note = "Internet access switched on, but Cloudflare could not set up the tunnel yet; it is retried on every heartbeat."
+    elif enabled:
+        note = f"Internet access on: https://{device.public_dns} (the device connects within a minute)."
+    else:
+        note = "Internet access switched off."
+    return redirect(f"/devices/{device.device_id}", note)
 
 
 @router.post("/devices/{device_id}/regenerate-claim")

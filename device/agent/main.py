@@ -9,8 +9,10 @@ import hashlib
 import hmac
 import json
 import os
+import secrets
 import shutil
 import socket
+import subprocess
 import time
 
 import requests
@@ -40,6 +42,15 @@ SITE_FILE = os.environ.get("SITE_FILE", f"{ETC}/site_fqdn")
 CADDY_SITE = os.environ.get("CADDY_SITE", f"{ETC}/caddy-site.caddy")
 CADDYFILE = os.environ.get("CADDYFILE", f"{ETC}/Caddyfile")
 CADDY_ADMIN = os.environ.get("CADDY_ADMIN", "http://127.0.0.1:2019")
+# Internet access: cloudflared runs the device's tunnel with this token; PUBLIC_FILE holds the
+# public name once the tunnel is connected (links and QR codes use it, see device/app, kiosk).
+TUNNEL_TOKEN_FILE = os.environ.get("TUNNEL_TOKEN_FILE", f"{ETC}/tunnel_token")
+PUBLIC_FILE = os.environ.get("PUBLIC_FILE", f"{ETC}/public_fqdn")
+CLOUDFLARED = os.environ.get("CLOUDFLARED", "/usr/local/bin/cloudflared")
+CLOUDFLARED_METRICS = os.environ.get("CLOUDFLARED_METRICS", "127.0.0.1:20241")
+# Seed for the key in the room-screen QR (see room_key in device/app and the kiosk): over the
+# internet, the list of meetings in progress opens only for people who can see the screen.
+ROOM_SEED_FILE = os.environ.get("ROOM_SEED_FILE", f"{ETC}/room_seed")
 
 
 def sign(method, path, body):
@@ -117,7 +128,7 @@ def heartbeat():
         "mem_pct": mem_pct(),
         "uptime": uptime(),
         "lan_ip": lan_ip(),
-        "tunnel_ok": None,
+        "tunnel_ok": tunnel.ok,
         "cert_expires_at": cert_expires_at(),
         "meetings_count_24h": None,
     }
@@ -126,12 +137,17 @@ def heartbeat():
         print("heartbeat", r.status_code, r.text[:200], flush=True)
     except requests.RequestException as e:
         print("heartbeat error", e, flush=True)
+        check_tunnel()  # no answer: the site may have lost its internet connection
         return
     if r.status_code == 200:
         update_kiosk(r.json())
         update_site(r.json())
+        update_tunnel(r.json())
     elif r.status_code == 403:
         update_kiosk({"license_status": "revoked", "claimed": True, "logo_sha256": None})
+        update_tunnel({})  # revoked: no internet access
+    else:
+        check_tunnel()
 
 
 def write_atomic(path, data, mode=0o644):
@@ -222,6 +238,108 @@ def update_site(info):
         print("site update error", e, flush=True)
 
 
+class Tunnel:
+    """cloudflared, supervised by the agent. ok is None without internet access, else whether the
+    tunnel is connected to Cloudflare."""
+
+    def __init__(self):
+        self.proc = None
+        self.ok = None
+
+    def running(self):
+        return self.proc is not None and self.proc.poll() is None
+
+    def start(self, token):
+        self.stop()
+        env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "TUNNEL_TOKEN": token}  # not on argv
+        self.proc = subprocess.Popen([CLOUDFLARED, "tunnel", "--no-autoupdate", "--metrics", CLOUDFLARED_METRICS,
+                                      "run"], env=env)
+        print("cloudflared started", flush=True)
+
+    def stop(self):
+        if self.running():
+            self.proc.terminate()
+            try:
+                self.proc.wait(10)
+            except subprocess.TimeoutExpired:
+                self.proc.kill()
+            print("cloudflared stopped", flush=True)
+        self.proc = None
+
+    def ready(self):
+        try:
+            return requests.get(f"http://{CLOUDFLARED_METRICS}/ready", timeout=3).status_code == 200
+        except requests.RequestException:
+            return False
+
+
+tunnel = Tunnel()
+public_fqdn = ""  # the public name the control plane last assigned, published while the tunnel is up
+
+
+def publish_public(value):
+    """Links and QR codes use PUBLIC_FILE when it holds a name, else the office-network link."""
+    if value != read_text(PUBLIC_FILE):
+        write_atomic(PUBLIC_FILE, value.encode())
+
+
+def check_tunnel():
+    """Without an answer from the control plane, keep the public name only while cloudflared is
+    actually connected; otherwise fall back to the office-network link so meetings in the room
+    keep working offline."""
+    try:
+        tunnel.ok = tunnel.ready() if tunnel.running() else None
+        publish_public(public_fqdn if tunnel.ok and public_fqdn else "")
+    except OSError as e:
+        print("tunnel check error", e, flush=True)
+
+
+def update_tunnel(info):
+    """Internet access: run the tunnel the control plane assigned, and publish the public name only
+    while the tunnel is connected (otherwise links fall back to the office-network name)."""
+    global public_fqdn
+    fqdn = info.get("public_fqdn") or ""
+    want_sha = info.get("tunnel_sha256")
+    publish = publish_public
+
+    try:
+        if not fqdn or not want_sha:
+            public_fqdn = ""
+            tunnel.stop()
+            tunnel.ok = None
+            publish("")
+            if os.path.exists(TUNNEL_TOKEN_FILE):
+                os.remove(TUNNEL_TOKEN_FILE)
+            return
+        token = read_text(TUNNEL_TOKEN_FILE)
+        if hashlib.sha256(token.encode()).hexdigest() != want_sha:
+            r = get("/api/v1/tunnel")
+            if r.status_code != 200:
+                print("tunnel fetch", r.status_code, flush=True)
+                check_tunnel()
+                return
+            data = r.json()
+            if hashlib.sha256(data["token"].encode()).hexdigest() != want_sha or data.get("public_fqdn") != fqdn:
+                print("tunnel fetch: mismatch, ignored", flush=True)
+                check_tunnel()
+                return
+            token = data["token"]
+            write_atomic(TUNNEL_TOKEN_FILE, token.encode(), 0o600)
+            tunnel.start(token)
+        elif not tunnel.running():
+            tunnel.start(token)
+        public_fqdn = fqdn
+        tunnel.ok = tunnel.ready()
+        publish(fqdn if tunnel.ok else "")
+    except (OSError, ValueError, KeyError, requests.RequestException) as e:
+        print("tunnel update error", e, flush=True)
+
+
+def ensure_room_seed():
+    if not read_text(ROOM_SEED_FILE):
+        write_atomic(ROOM_SEED_FILE, secrets.token_hex(32).encode(), 0o644)
+
+
 def update_kiosk(info):
     """Keep the LCD kiosk's view of the control plane in /etc/appliance/kiosk.
 
@@ -272,6 +390,8 @@ def refresh_license():
 
 
 if __name__ == "__main__":
+    ensure_room_seed()
+    publish_public("")  # cloudflared isn't running yet: links use the office-network name until it connects
     next_license = 0
     while True:
         heartbeat()

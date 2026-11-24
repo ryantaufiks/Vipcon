@@ -35,7 +35,11 @@ host.
      `https://acme.lan.<root domain>`. Without one, the device uses its automatic name
      `https://dev-<id>.lan.<root domain>`. Both get a trusted certificate automatically.
    - Names of the form `dev-…` and a few others (`www`, `admin`, …) are reserved.
-6. **Branding** (optional): upload a logo and tagline, either global or per client. The device's
+6. **Internet access** (optional, if the plan includes it): on the device page, tick
+   **Allow internet access**. The device then gets one public link
+   (`https://<site>.<root domain>`) used for meeting invites and the room-screen QR, so guests
+   can join from any network. Admin and claim stay on the office network.
+7. **Branding** (optional): upload a logo and tagline, either global or per client. The device's
    screen picks it up within a minute or two.
 
 ## 2. Prepare the Raspberry Pi (once per Pi)
@@ -97,6 +101,7 @@ Check each of these before the device leaves your hands.
 | Certificate | Console → the device | "Let's Encrypt, valid until …" |
 | Trusted HTTPS | `curl https://<name>.lan.<root domain>/api/v1/claim/status` (from the same LAN) | `{"claimed":false,…}` with no certificate error |
 | Screen | Touch the screen | Activation QR; its link starts with `https://<name>.lan.<root domain>/claim` |
+| Internet link (if enabled) | Console → the device; heartbeat "Tunnel" column | "Internet link" shows `https://<name>.<root domain>`; Tunnel `ok` |
 
 The certificate usually arrives within a few minutes of the first heartbeat. Until then, the
 screen's links use the Pi's IP address, which works but shows a certificate warning.
@@ -113,7 +118,8 @@ screen's links use the Pi's IP address, which works but shows a certificate warn
    Create the Client Admin account. The claim code works once.
 3. **Meet**: sign in at `https://<name>.lan.<root domain>/admin`, create meetings and share the
    links. People in the room touch the screen and scan the QR to see the meetings in progress
-   and join from their browser.
+   and join from their browser. With internet access, the shared links and the QR use the public
+   name and work from any network; without it, they work only on the office network.
 
 ### Moving a device
 
@@ -126,7 +132,7 @@ minute or two of reaching the internet.
 | Symptom | Likely cause | What to do |
 |---|---|---|
 | Phone says "site can't be reached" for the `.lan` link | Phone isn't on the same network, or is on mobile data | Join the office Wi-Fi |
-| Same, on the right network | The router blocks DNS answers that point to private IPs (DNS rebind protection; common on hotel and some office routers) | Allow `lan.<root domain>` in the router, or use the Pi's IP address |
+| Same, on the right network | The router blocks DNS answers that point to private IPs (DNS rebind protection; common on hotel and some office routers) | Turn on internet access (its public link isn't affected), allow `lan.<root domain>` in the router, or use the Pi's IP address |
 | Certificate warning | The certificate isn't installed yet, or the link uses the IP | Wait a few minutes after the first heartbeat; check the console |
 | "Device not ready" on the screen | Not provisioned | Re-run the installer with `device.json` |
 | Can't start meetings | No active contract (licence `no_contract` or `expired`) | Create or renew the contract in the console |

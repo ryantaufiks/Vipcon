@@ -19,9 +19,12 @@ from services import (
     license_status,
     logo_for_device,
     device_fqdn,
+    internet_allowed,
+    reconcile_tunnel,
     sync_cert_wanted,
     tagline_for_device,
     tls_bundle,
+    tunnel_token,
 )
 from web_common import client_ip
 
@@ -110,6 +113,8 @@ def heartbeat(request: Request, device=Depends(signed_device), db=Depends(get_db
     status, _ = license_status(db, device)
     logo = logo_for_device(db, device)
     bundle = tls_bundle(device_fqdn(device))
+    tunnel_ready = reconcile_tunnel(db, device, log)
+    token = tunnel_token(device) if tunnel_ready else None
     db.commit()
     if first_contact:
         sync_cert_wanted(db)  # a new device needs a certificate for its automatic name
@@ -124,7 +129,20 @@ def heartbeat(request: Request, device=Depends(signed_device), db=Depends(get_db
         # Office-network name and its certificate (fetched from /api/v1/tls when the hash changes).
         "site_fqdn": device_fqdn(device),
         "tls_sha256": bundle[2] if bundle else None,
+        # Internet access: the public name and the hash of the tunnel token (fetched from
+        # /api/v1/tunnel when it changes). Both null when the device has no internet access.
+        "public_fqdn": device.public_dns if token else None,
+        "tunnel_sha256": sha256_hex(token) if token else None,
     }
+
+
+@router.get("/tunnel")
+def tunnel(device=Depends(signed_device), db=Depends(get_db)):
+    """The token cloudflared on the device runs its tunnel with."""
+    token = tunnel_token(device) if device.public_dns and internet_allowed(db, device) else None
+    if not token:
+        raise HTTPException(404, "no internet access")
+    return {"public_fqdn": device.public_dns, "token": token}
 
 
 @router.get("/tls")

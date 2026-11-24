@@ -65,6 +65,13 @@ class Device(Base):
     site_id = Column(String(40), unique=True, nullable=True)
     # LAN IP currently published in DNS for site_id (avoids re-sending unchanged records).
     dns_ip = Column(String(45), nullable=True)
+    # Internet access: the admin's switch (the plan must also include it), the device's
+    # Cloudflare tunnel, its token (encrypted like the device secret) and the public name
+    # currently routed to it.
+    internet_enabled = Column(Boolean, default=False)
+    tunnel_id = Column(String(64), nullable=True)
+    tunnel_token_encrypted = Column(String, nullable=True)
+    public_dns = Column(String(255), nullable=True)
     created_at = Column(DateTime(timezone=True), default=now)
 
     client = relationship("Client")

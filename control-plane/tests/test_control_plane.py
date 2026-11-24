@@ -40,7 +40,7 @@ import main  # noqa: E402
 from db import SessionLocal  # noqa: E402
 from models import Base, SuperAdmin  # noqa: E402
 from db import engine  # noqa: E402
-from security import LICENSE_PUBLIC_PEM, hash_password, new_totp_secret  # noqa: E402
+from security import LICENSE_PUBLIC_PEM, hash_password, new_totp_secret, sha256_hex  # noqa: E402
 
 EMAIL = "root@example.test"
 PASSWORD = "correct horse battery"
@@ -449,6 +449,184 @@ def test_site_id_dns_and_certificate(client, admin, monkeypatch):
     assert "acme.lan.example.test" not in open(os.environ["CERTS_WANTED"]).read()
 
 
+def test_internet_access_tunnel(client, admin, monkeypatch):
+    import cloudflare
+    from models import Client, Device, Plan
+
+    calls = []
+    monkeypatch.setattr(cloudflare, "upsert_a", lambda name, ip: True)
+    monkeypatch.setattr(cloudflare, "ensure_tunnel",
+                        lambda name: calls.append(("ensure", name)) or ("tun-1", "tunnel-token-1"))
+    monkeypatch.setattr(cloudflare, "route_tunnel",
+                        lambda tid, host, service: calls.append(("route", tid, host, service)) or True)
+    monkeypatch.setattr(cloudflare, "delete_name", lambda name: calls.append(("delete_name", name)))
+    monkeypatch.setattr(cloudflare, "delete_tunnel", lambda tid: calls.append(("delete_tunnel", tid)))
+    monkeypatch.setattr(cloudflare, "foreign_records", lambda name: [])
+
+    plan_form = {"csrf": admin, "name": "Internet", "connectivity_mode": "standard", "max_participants": "10",
+                 "max_users": "20", "max_concurrent_meetings": "5", "active": "on", "internet_access": "on"}
+    assert client.post("/plans", data=plan_form, follow_redirects=False).status_code == 303
+    client.post("/clients", data={"csrf": admin, "name": "Remote Co"}, follow_redirects=False)
+    db = SessionLocal()
+    plan_id = db.query(Plan).filter_by(name="Internet").one().id
+    client_id = db.query(Client).filter_by(name="Remote Co").one().id
+    db.close()
+    r = client.post("/devices", data={"csrf": admin, "label": "Remote", "client_id": str(client_id),
+                                      "plan_id": str(plan_id)})
+    payload = json.loads(unescape(re.search(r"<pre>(.*?)</pre>", r.text, re.S).group(1)))
+    dev = payload["device_id"]
+    agent = load_agent(dev, payload["device_secret"])
+    client.post(f"/devices/{dev}", data={"csrf": admin, "connectivity_mode": "standard", "site_id": "remote1",
+                                         "client_id": str(client_id), "plan_id": str(plan_id)})
+    hb = lambda: signed(client, agent, "/api/v1/heartbeat", {"lan_ip": "192.168.5.5"}).json()  # noqa: E731
+
+    # Off by default; switching it on without an active contract does nothing yet.
+    assert hb()["public_fqdn"] is None and calls == []
+    r = client.post(f"/devices/{dev}/internet", data={"csrf": admin, "enabled": "on"}, follow_redirects=False)
+    assert r.status_code == 303 and calls == []
+    assert "needs an active contract" in client.get(f"/devices/{dev}").text
+    assert signed_get(client, agent, "/api/v1/tunnel").status_code == 404
+
+    db = SessionLocal()
+    device_pk = db.query(Device).filter_by(device_id=dev).one().id
+    db.close()
+    today = date.today()
+    client.post("/contracts", data={"csrf": admin, "client_id": str(client_id), "device_id": str(device_pk),
+                                    "plan_id": str(plan_id), "start_date": str(today - timedelta(days=1)),
+                                    "end_date": str(today + timedelta(days=30)), "status": "active"},
+                follow_redirects=False)
+
+    # Active contract on a plan with internet access: the next heartbeat sets the tunnel up once.
+    info = hb()
+    assert info["public_fqdn"] == "remote1.example.test"
+    assert info["tunnel_sha256"] == sha256_hex("tunnel-token-1")
+    assert calls == [("ensure", f"vipcon-{dev}"), ("route", "tun-1", "remote1.example.test", "http://127.0.0.1:8081")]
+    calls.clear()
+    assert hb()["public_fqdn"] == "remote1.example.test" and calls == []  # nothing changed: no API calls
+    t = signed_get(client, agent, "/api/v1/tunnel").json()
+    assert t == {"public_fqdn": "remote1.example.test", "token": "tunnel-token-1"}
+    db = SessionLocal()
+    assert "tunnel-token-1" not in (db.query(Device).filter_by(device_id=dev).one().tunnel_token_encrypted or "")
+    db.close()
+    assert "https://remote1.example.test" in client.get(f"/devices/{dev}").text
+
+    # The agent fetches the token, starts cloudflared and publishes the name once it's connected.
+    etc = os.path.join(TMP, "etc-tunnel")
+    os.makedirs(etc, exist_ok=True)
+    agent.TUNNEL_TOKEN_FILE, agent.PUBLIC_FILE = os.path.join(etc, "tunnel_token"), os.path.join(etc, "public_fqdn")
+    agent.get = lambda path: signed_get(client, agent, path)
+
+    class FakeTunnel:
+        def __init__(self):
+            self.started, self.connected, self.up, self.ok = [], False, False, None
+
+        def start(self, token):
+            self.started.append(token)
+            self.up = True
+
+        def stop(self):
+            self.up = False
+
+        def running(self):
+            return self.up
+
+        def ready(self):
+            return self.connected
+
+    fake = agent.tunnel = FakeTunnel()
+    agent.update_tunnel(info)
+    assert fake.started == ["tunnel-token-1"] and agent.read_text(agent.PUBLIC_FILE) == ""  # not connected yet
+    assert oct(os.stat(agent.TUNNEL_TOKEN_FILE).st_mode & 0o777) == "0o600"
+    fake.connected = True
+    agent.update_tunnel(info)
+    assert fake.started == ["tunnel-token-1"] and agent.read_text(agent.PUBLIC_FILE) == "remote1.example.test"
+    assert fake.ok is True
+    fake.up = False  # cloudflared died: restarted with the stored token
+    agent.update_tunnel(info)
+    assert fake.started == ["tunnel-token-1"] * 2
+    agent.update_tunnel(dict(info, tunnel_sha256="0" * 64))  # token mismatch: ignored
+    assert fake.started == ["tunnel-token-1"] * 2
+
+    # No answer from the control plane: the public name stays only while cloudflared is connected,
+    # so when the site loses its internet, links and the room QR fall back to the office network.
+    def offline(path, payload):
+        raise agent.requests.ConnectionError("no route to host")
+
+    real_post, agent.post = agent.post, offline
+    try:
+        agent.update_tunnel(info)
+        assert agent.read_text(agent.PUBLIC_FILE) == "remote1.example.test"
+        agent.heartbeat()  # still connected (the control plane alone is down): keep the public link
+        assert agent.read_text(agent.PUBLIC_FILE) == "remote1.example.test" and fake.ok is True
+        fake.connected = False
+        agent.heartbeat()  # internet gone
+        assert agent.read_text(agent.PUBLIC_FILE) == "" and fake.ok is False
+        fake.connected = True
+        agent.heartbeat()  # back
+        assert agent.read_text(agent.PUBLIC_FILE) == "remote1.example.test"
+        agent.post = lambda path, payload: type("R", (), {"status_code": 502, "text": ""})()
+        fake.connected = False
+        agent.heartbeat()  # an error page from a proxy counts as no answer too
+        assert agent.read_text(agent.PUBLIC_FILE) == ""
+    finally:
+        agent.post = real_post
+    fake.connected = True
+    agent.update_tunnel(info)
+    assert agent.read_text(agent.PUBLIC_FILE) == "remote1.example.test"
+
+    # A new Site ID moves the public name.
+    client.post(f"/devices/{dev}", data={"csrf": admin, "connectivity_mode": "standard", "site_id": "remote2",
+                                         "client_id": str(client_id), "plan_id": str(plan_id)})
+    assert calls == [("route", "tun-1", "remote2.example.test", "http://127.0.0.1:8081"),
+                     ("delete_name", "remote1.example.test")]
+    calls.clear()
+    assert hb()["public_fqdn"] == "remote2.example.test" and calls == []
+
+    # A Site ID whose public name already has someone else's DNS record (a website, mail): nothing is
+    # touched, the device keeps its current public name and the admin is told why.
+    taken = {"taken1.example.test"}
+
+    def route(tid, host, service):
+        if host in taken:
+            raise cloudflare.NameTaken(f"{host} is taken")
+        calls.append(("route", tid, host, service))
+        return True
+
+    monkeypatch.setattr(cloudflare, "route_tunnel", route)
+    monkeypatch.setattr(cloudflare, "foreign_records", lambda name: [{"id": "site"}] if name in taken else [])
+    form = {"csrf": admin, "connectivity_mode": "standard", "client_id": str(client_id), "plan_id": str(plan_id)}
+    r = client.post(f"/devices/{dev}", data=dict(form, site_id="taken1"))
+    assert calls == [] and "https://taken1.example.test is already used by another DNS record" in r.text
+    assert "still on" in r.text and "https://remote2.example.test" in r.text
+    assert hb()["public_fqdn"] == "remote2.example.test" and calls == []
+    client.post(f"/devices/{dev}", data=dict(form, site_id="remote2"))
+    assert calls == [] and hb()["public_fqdn"] == "remote2.example.test"
+
+    # Switching it off removes the name and the tunnel; the agent stops cloudflared.
+    client.post(f"/devices/{dev}/internet", data={"csrf": admin}, follow_redirects=False)
+    assert calls == [("delete_name", "remote2.example.test"), ("delete_tunnel", "tun-1")]
+    info = hb()
+    assert info["public_fqdn"] is None and info["tunnel_sha256"] is None
+    assert signed_get(client, agent, "/api/v1/tunnel").status_code == 404
+    agent.update_tunnel(info)
+    assert not fake.up and fake.ok is None and agent.read_text(agent.PUBLIC_FILE) == ""
+    assert not os.path.exists(agent.TUNNEL_TOKEN_FILE)
+
+    # On again, then suspending the device takes it down too.
+    calls.clear()
+    client.post(f"/devices/{dev}/internet", data={"csrf": admin, "enabled": "on"}, follow_redirects=False)
+    assert ("route", "tun-1", "remote2.example.test", "http://127.0.0.1:8081") in calls
+    calls.clear()
+    client.post(f"/devices/{dev}/status", data={"csrf": admin, "action": "suspend"}, follow_redirects=False)
+    assert calls == [("delete_name", "remote2.example.test"), ("delete_tunnel", "tun-1")]
+
+    # "console" is reserved: it's the product's own host.
+    client.post(f"/devices/{dev}", data={"csrf": admin, "connectivity_mode": "standard", "site_id": "console"})
+    db = SessionLocal()
+    assert db.query(Device).filter_by(device_id=dev).one().site_id == "remote2"
+    db.close()
+
+
 def test_public_site_and_console_are_separate(client):
     site = {"host": "example.test"}
     r = client.get("/", headers=site)
@@ -467,3 +645,50 @@ def test_public_site_and_console_are_separate(client):
     assert "Disallow: /" in client.get("/robots.txt").text
     console = client.get("/", follow_redirects=False)
     assert console.status_code in (200, 303) and "never leave the room" not in console.text
+
+
+def test_cloudflare_only_touches_its_own_records(monkeypatch):
+    import cloudflare
+
+    records = {
+        "mine.example.test": [{"id": "m1", "type": "CNAME", "content": "old.cfargotunnel.com", "proxied": True,
+                               "comment": cloudflare.PUBLIC_COMMENT}],
+        "www.example.test": [{"id": "w1", "type": "A", "content": "203.0.113.7", "proxied": True,
+                              "comment": "company website"}],
+        "mail.example.test": [{"id": "x1", "type": "MX", "content": "mx.example.test"}],
+    }
+    calls = []
+
+    def fake_call(method, path, body=None):
+        calls.append((method, path))
+        if method == "GET":
+            name = path.split("name=")[1]
+            return records.get(name, [])
+        return {}
+
+    monkeypatch.setattr(cloudflare, "_call", fake_call)
+    monkeypatch.setattr(cloudflare, "_tunnels", lambda path="", method="GET", body=None: calls.append(("tunnel", path)))
+
+    # Someone else's records are never replaced, and the tunnel config isn't changed either.
+    for name in ("www.example.test", "mail.example.test"):
+        calls.clear()
+        with pytest.raises(cloudflare.NameTaken):
+            cloudflare.route_tunnel("tun-9", name, "http://127.0.0.1:8081")
+        assert [c for c in calls if c[0] != "GET"] == []
+        assert cloudflare.foreign_records(name)
+    # ...nor deleted when a device lets a name go.
+    calls.clear()
+    cloudflare.delete_name("www.example.test")
+    assert [c for c in calls if c[0] != "GET"] == []
+
+    # The control plane's own record is updated in place, and removed on delete_name.
+    calls.clear()
+    assert cloudflare.route_tunnel("tun-9", "mine.example.test", "http://127.0.0.1:8081") is True
+    assert ("PUT", "/dns_records/m1") in calls and ("tunnel", "/tun-9/configurations") in calls
+    calls.clear()
+    cloudflare.delete_name("mine.example.test")
+    assert ("DELETE", "/dns_records/m1") in calls
+    # A free name gets a new record carrying the ownership comment.
+    calls.clear()
+    assert cloudflare.route_tunnel("tun-9", "free.example.test", "http://127.0.0.1:8081") is True
+    assert ("POST", "/dns_records") in calls and not cloudflare.foreign_records("free.example.test")

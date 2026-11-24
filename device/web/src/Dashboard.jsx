@@ -74,7 +74,7 @@ export default function Dashboard({ theme, onToggleTheme }) {
       })
       setMTitle('')
       setMPasscode('')
-      const url = m.local_url || m.internet_url
+      const url = m.url || m.local_url
       navigator.clipboard.writeText(`${url}\nPasscode: ${m.passcode || '-'}`).catch(() => {})
       setInfo(`Created. Invite link + passcode copied to clipboard (${m.passcode || 'no passcode'})`)
       refresh(token)
@@ -124,7 +124,7 @@ export default function Dashboard({ theme, onToggleTheme }) {
   }
 
   function copyInvite(m) {
-    navigator.clipboard.writeText(m.local_url || m.internet_url).catch(() => {})
+    navigator.clipboard.writeText(m.url || m.local_url).catch(() => {})
     setInfo('Invite link copied')
   }
 

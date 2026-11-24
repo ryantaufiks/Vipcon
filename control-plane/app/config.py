@@ -32,6 +32,12 @@ LAN_LABEL = env("LAN_LABEL", "lan")
 # Cloudflare token with Zone:DNS:Edit on ROOT_DOMAIN's zone; empty disables DNS + certificates.
 CF_API_TOKEN = env("CF_API_TOKEN")
 CF_ZONE_ID = env("CF_ZONE_ID")
+# Internet access (public name per device through a Cloudflare Tunnel) also needs
+# Account:Cloudflare Tunnel:Edit on the same token. The account id is looked up from the zone
+# when not set.
+CF_ACCOUNT_ID = env("CF_ACCOUNT_ID")
+# The tunnel delivers requests to this listener on the device (Caddy, localhost only).
+TUNNEL_SERVICE = env("TUNNEL_SERVICE", "http://127.0.0.1:8081")
 # Shared with the certs worker: it reads the wanted list and writes fullchain/privkey here.
 CERTS_WANTED = env("CERTS_WANTED", "/data/certs/wanted.txt")
 TLS_DIR = env("TLS_DIR", "/tls")

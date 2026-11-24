@@ -1,3 +1,5 @@
+import hashlib
+import hmac
 import os
 import re
 import secrets
@@ -7,7 +9,7 @@ from datetime import datetime, timedelta, timezone
 
 import jwt
 import requests
-from fastapi import Depends, FastAPI, Header, HTTPException, Response
+from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response
 from pydantic import BaseModel
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import sessionmaker
@@ -83,18 +85,45 @@ def current_user(authorization: str = Header(None), db=Depends(get_db)):
 
 SITE_FILE = os.environ.get("SITE_FILE", "/etc/appliance/site_fqdn")
 LAN_IP_FILE = os.environ.get("LAN_IP_FILE", "/etc/appliance/lan_ip")
+# Internet access: the public name, written by the agent while the device's tunnel is connected.
+PUBLIC_FILE = os.environ.get("PUBLIC_FILE", "/etc/appliance/public_fqdn")
+ROOM_SEED_FILE = os.environ.get("ROOM_SEED_FILE", "/etc/appliance/room_seed")
+
+
+def first_line(path):
+    try:
+        with open(path) as f:
+            return f.read().strip()
+    except OSError:
+        return ""
+
+
+def public_base():
+    """The meeting link everyone gets: the public name while the tunnel is up (works in the room
+    and from anywhere), otherwise the office-network link."""
+    host = first_line(PUBLIC_FILE)
+    return f"https://{host}" if host else local_base()
+
+
+def room_keys(at=None):
+    """Keys for the room-screen QR (the kiosk computes the same): today's and yesterday's (UTC),
+    so a page opened just before midnight keeps working."""
+    seed = first_line(ROOM_SEED_FILE)
+    if not seed:
+        return []
+    day = (at or datetime.now(timezone.utc)).date()
+    return [hmac.new(seed.encode(), f"now:{d.isoformat()}".encode(), hashlib.sha256).hexdigest()[:20]
+            for d in (day, day - timedelta(days=1))]
+
+
+def from_internet(request):
+    """Set only by Caddy's tunnel listener; stripped from every other request."""
+    return request.headers.get("x-vipcon-public") == "1"
 
 
 def local_base():
     """Office-network link: the device's name once its certificate is in place (written by the
     agent), otherwise its LAN IP."""
-    def first_line(path):
-        try:
-            with open(path) as f:
-                return f.read().strip()
-        except OSError:
-            return ""
-
     host = first_line(SITE_FILE) or first_line(LAN_IP_FILE) or "localhost"
     return f"https://{host}"
 
@@ -120,8 +149,8 @@ def meeting_out(m):
         "max_participants": m.max_participants,
         "show_on_screen": m.show_on_screen is not False,
         "created_at": m.created_at.isoformat() if m.created_at else None,
+        "url": f"{public_base()}/m/{m.room_name}",
         "local_url": f"{local_base()}/m/{m.room_name}",
-        "internet_url": f"https://{DEVICE_ID}.{ROOT_DOMAIN}/m/{m.room_name}",
     }
 
 
@@ -510,13 +539,16 @@ def live_rooms():
 
 
 @app.get("/api/v1/meetings/now")
-def meetings_now(db=Depends(get_db)):
+def meetings_now(request: Request, k: str = "", db=Depends(get_db)):
     """Meetings in progress right now, for the page behind the QR on the device screen.
 
-    No login: it is only reachable on the office network, lists only meetings their host
-    left visible, and joining still needs the passcode and/or the host's lobby approval.
+    No login: on the office network anyone can see it; through the internet only with the key
+    from the room screen's QR. It lists only meetings their host left visible, and joining still
+    needs the passcode and/or the host's lobby approval.
     "In progress" means LiveKit has the room open with at least one participant.
     """
+    if from_internet(request) and not any(hmac.compare_digest(k, key) for key in room_keys()):
+        raise HTTPException(403, "Scan the QR code on the room screen to see the meetings in this room.")
     try:
         live = live_rooms()
     except Exception:
@@ -543,6 +575,24 @@ def meetings_now(db=Depends(get_db)):
     return {"meetings": out}
 
 
+PASSCODE_FAILURES = {}  # room -> recent failure times; meeting links can be opened from the internet
+PASSCODE_MAX_FAILURES, PASSCODE_WINDOW = 10, 600
+_passcode_lock = threading.Lock()
+
+
+def passcode_blocked(room, failed=False):
+    with _passcode_lock:
+        now = time.time()
+        recent = [t for t in PASSCODE_FAILURES.get(room, []) if now - t < PASSCODE_WINDOW]
+        if failed:
+            recent.append(now)
+        if recent:
+            PASSCODE_FAILURES[room] = recent
+        else:
+            PASSCODE_FAILURES.pop(room, None)
+        return len(recent) >= PASSCODE_MAX_FAILURES
+
+
 @app.post("/api/v1/join")
 def join(req: JoinRequest, db=Depends(get_db)):
     m = db.query(Meeting).filter_by(room_name=req.room).first()
@@ -550,8 +600,12 @@ def join(req: JoinRequest, db=Depends(get_db)):
         raise HTTPException(404, "unknown room")
     if m.locked:
         raise HTTPException(403, "room locked")
-    if m.passcode_hash and not (req.passcode and verify_password(req.passcode, m.passcode_hash)):
-        raise HTTPException(401, "invalid passcode")
+    if m.passcode_hash:
+        if passcode_blocked(m.room_name):
+            raise HTTPException(429, "Too many wrong passcodes. Try again in a few minutes.")
+        if not (req.passcode and verify_password(req.passcode, m.passcode_hash)):
+            passcode_blocked(m.room_name, failed=True)
+            raise HTTPException(401, "invalid passcode")
     if m.lobby:
         existing = db.query(LobbyRequest).filter_by(room_name=m.room_name, identity=req.identity).first()
         if not existing:

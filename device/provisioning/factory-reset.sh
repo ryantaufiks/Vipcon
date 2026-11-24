@@ -12,8 +12,9 @@ systemctl disable --now appliance.service 2>/dev/null || true
 if [ -f /opt/appliance/docker-compose.yml ]; then
     (cd /opt/appliance && docker compose down --volumes --remove-orphans) || true
 fi
-rm -rf "$ETC/ca" "$ETC/kiosk/"*
+rm -rf "$ETC/ca" "$ETC/tls" "$ETC/kiosk/"*
 rm -f "$ETC"/{device_id,device_secret,claim_code,connectivity_mode,root_domain,control_plane_url} \
       "$ETC"/{license_pubkey.pem,license.jwt,device.json,livekit_key,livekit_secret,livekit.yaml} \
-      "$ETC"/{app.env,agent.env,Caddyfile}
+      "$ETC"/{app.env,agent.env,Caddyfile,caddy-site.caddy,site_fqdn} \
+      "$ETC"/{tunnel_token,public_fqdn,room_seed}
 echo "factory reset done: the device is unprovisioned"
