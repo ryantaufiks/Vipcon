@@ -1,0 +1,14 @@
+{
+  "name": "vipcon-site",
+  "private": true,
+  "description": "Source of app/static/site/landing.js (the landing page's 3D device viewer). Three.js is bundled so the page needs no CDN and passes the app's script-src 'self' CSP.",
+  "scripts": {
+    "build": "esbuild landing.js --bundle --minify --format=esm --target=es2020 --legal-comments=eof --outfile=../app/static/site/landing.js"
+  },
+  "dependencies": {
+    "three": "0.165.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.2"
+  }
+}
