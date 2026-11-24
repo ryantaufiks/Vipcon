@@ -46,6 +46,11 @@ TURN_HOST = env("TURN_HOST", f"turn.{ROOT_DOMAIN}")
 TURN_PORT = int(env("TURN_PORT", "3478"))
 # Lifetime of the credentials a browser gets (seconds); LiveKit caps it at 24 h.
 TURN_TTL = int(env("TURN_TTL", "14400"))
+# TURN over TLS for networks that only allow HTTPS: a DNS name with a certificate (issued by the
+# certs worker, like the devices' names) and port 443. Offered to devices once the certificate
+# exists. Empty: UDP/TCP only.
+TURN_TLS_HOST = env("TURN_TLS_HOST")
+TURN_TLS_PORT = int(env("TURN_TLS_PORT", "443"))
 # Shared with the certs worker: it reads the wanted list and writes fullchain/privkey here.
 CERTS_WANTED = env("CERTS_WANTED", "/data/certs/wanted.txt")
 TLS_DIR = env("TLS_DIR", "/tls")

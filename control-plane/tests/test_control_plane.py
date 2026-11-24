@@ -772,3 +772,30 @@ def test_cloudflare_only_touches_its_own_records(monkeypatch):
     calls.clear()
     assert cloudflare.route_tunnel("tun-9", "free.example.test", "http://127.0.0.1:8081") is True
     assert ("POST", "/dns_records") in calls and not cloudflare.foreign_records("free.example.test")
+
+
+def test_turn_over_tls_is_offered_once_its_certificate_exists(monkeypatch):
+    import config
+    import services
+
+    class Dev:
+        public_dns = "site1.example.test"
+
+    monkeypatch.setattr(config, "TURN_SECRET", "b2" * 16)
+    monkeypatch.setattr(config, "TURN_TLS_HOST", "turn.example.test")
+    issued = {}
+    monkeypatch.setattr(services, "tls_bundle", lambda name: issued.get(name))
+    protocols = lambda: [s["protocol"] for s in services.turn_config(Dev())["servers"]]  # noqa: E731
+    assert protocols() == ["udp", "tcp"]  # no certificate yet: browsers are not sent to a dead port
+    issued["turn.example.test"] = ("chain", "key", "sha", None)
+    assert protocols() == ["udp", "tcp", "tls"]
+    tls = services.turn_config(Dev())["servers"][2]
+    assert tls == {"host": "turn.example.test", "port": 443, "protocol": "tls"}
+    # The certs worker is asked for the relay's certificate.
+    db = SessionLocal()
+    try:
+        assert "turn.example.test" in services.sync_cert_wanted(db)
+        monkeypatch.setattr(config, "TURN_TLS_HOST", None)
+        assert "turn.example.test" not in services.sync_cert_wanted(db)
+    finally:
+        db.close()

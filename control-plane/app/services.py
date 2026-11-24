@@ -330,11 +330,15 @@ def is_private_ipv4(value):
 
 def sync_cert_wanted(db):
     """Tell the certs worker which names need a certificate: every device that has reported in
-    (so its automatic name works for the claim link) and is not revoked."""
+    (so its automatic name works for the claim link) and is not revoked, and the TURN relay."""
     from config import CERTS_WANTED
+
+    from config import TURN_SECRET, TURN_TLS_HOST
 
     names = sorted(device_fqdn(d) for d in db.query(Device).filter(Device.last_seen_at.isnot(None))
                    if d.status != "revoked")
+    if TURN_SECRET and TURN_TLS_HOST:
+        names.append(TURN_TLS_HOST)  # the relay's TLS listener (see the turn service)
     try:
         os.makedirs(os.path.dirname(CERTS_WANTED), exist_ok=True)
         tmp = CERTS_WANTED + ".tmp"
@@ -438,15 +442,14 @@ def reconcile_tunnel(db, device, log=None, problems=None):
 def turn_config(device):
     """The TURN relay a device with internet access hands to browsers, or None (no relay set up).
     The secret is shared by all devices: whoever holds it can mint relay credentials."""
-    from config import TURN_HOST, TURN_PORT, TURN_SECRET, TURN_TTL
+    from config import TURN_HOST, TURN_PORT, TURN_SECRET, TURN_TLS_HOST, TURN_TLS_PORT, TURN_TTL
 
     if not TURN_SECRET or not device.public_dns:
         return None
-    return {
-        "servers": [{"host": TURN_HOST, "port": TURN_PORT, "protocol": proto} for proto in ("udp", "tcp")],
-        "secret": TURN_SECRET,
-        "ttl": TURN_TTL,
-    }
+    servers = [{"host": TURN_HOST, "port": TURN_PORT, "protocol": proto} for proto in ("udp", "tcp")]
+    if TURN_TLS_HOST and tls_bundle(TURN_TLS_HOST):
+        servers.append({"host": TURN_TLS_HOST, "port": TURN_TLS_PORT, "protocol": "tls"})
+    return {"servers": servers, "secret": TURN_SECRET, "ttl": TURN_TTL}
 
 
 def turn_sha256(config):
