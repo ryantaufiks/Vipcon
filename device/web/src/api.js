@@ -28,7 +28,12 @@ async function api(method, path, body, token) {
     body: body !== undefined ? JSON.stringify(body) : undefined,
   })
   const data = await res.json().catch(() => ({}))
-  if (!res.ok) throw new Error(data.detail || 'Request failed')
+  if (!res.ok) {
+    const detail = typeof data.detail === 'string' ? data.detail : 'Request failed'
+    const err = new Error(detail)
+    err.status = res.status
+    throw err
+  }
   return data
 }
 
@@ -110,4 +115,16 @@ export async function claimDevice(data) {
 
 export async function meetingsNow(key) {
   return api('GET', '/meetings/now' + (key ? '?k=' + encodeURIComponent(key) : ''))
+}
+
+export async function meetingInfo(room) {
+  return api('GET', '/meeting-info?room=' + encodeURIComponent(room))
+}
+
+export async function me(token) {
+  return api('GET', '/me', undefined, token)
+}
+
+export async function getSettings(token) {
+  return api('GET', '/settings', undefined, token)
 }

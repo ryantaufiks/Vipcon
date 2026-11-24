@@ -1,97 +1,69 @@
 import { useEffect, useRef, useState } from 'react'
 import { Track, TrackEvent, ParticipantEvent } from 'livekit-client'
-import { Expand } from './icons.jsx'
+import { Avatar } from './ui.jsx'
+import { Mic, Expand, Monitor } from './icons.jsx'
 
-export default function VideoTile({ participant, isLocal, version }) {
-  const camRef = useRef(null)
-  const screenRef = useRef(null)
+// One participant's camera (or, with source="screen", their shared screen).
+export default function VideoTile({ participant, isLocal, version, source = 'camera', displayName }) {
+  const videoRef = useRef(null)
   const audioRef = useRef(null)
+  const tileRef = useRef(null)
   const [micOn, setMicOn] = useState(true)
-  const [camOn, setCamOn] = useState(true)
-  const [screenOn, setScreenOn] = useState(false)
+  const [videoOn, setVideoOn] = useState(false)
   const [speaking, setSpeaking] = useState(false)
+  const screen = source === 'screen'
 
   useEffect(() => {
-    const cam = participant.getTrackPublication(Track.Source.Camera)?.track
-    const mic = participant.getTrackPublication(Track.Source.Microphone)?.track
-    const scr = participant.getTrackPublication(Track.Source.ScreenShare)?.track
+    const video = participant.getTrackPublication(screen ? Track.Source.ScreenShare : Track.Source.Camera)?.track
+    // Audio plays from the camera tile only (and never for yourself).
+    const mic = !screen && !isLocal ? participant.getTrackPublication(Track.Source.Microphone)?.track : null
+    const micPub = participant.getTrackPublication(Track.Source.Microphone)
 
-    if (cam && camRef.current) cam.attach(camRef.current)
-    if (scr && screenRef.current) {
-      scr.attach(screenRef.current)
-      screenRef.current.play().catch(() => {})
-    }
+    if (video && videoRef.current) video.attach(videoRef.current)
     if (mic && audioRef.current) mic.attach(audioRef.current)
 
     const sync = () => {
-      setMicOn(mic ? !mic.isMuted : false)
-      setCamOn(cam ? !cam.isMuted : false)
-      setScreenOn(!!scr)
+      setMicOn(!!micPub && !micPub.isMuted)
+      setVideoOn(!!video && !video.isMuted)
     }
     sync()
-
-    const cleanups = []
-    const onTrack = (t, cb) => {
-      if (!t) return
-      const h = () => cb()
-      t.on(TrackEvent.Muted, h)
-      t.on(TrackEvent.Unmuted, h)
-      cleanups.push(() => {
-        t.off(TrackEvent.Muted, h)
-        t.off(TrackEvent.Unmuted, h)
-      })
-    }
-    onTrack(cam, sync)
-    onTrack(mic, sync)
-
-    let spk = null
-    if (participant.on) {
-      spk = (s) => setSpeaking(s)
-      participant.on(ParticipantEvent.IsSpeakingChanged, spk)
-    }
+    const tracks = [video, micPub?.track].filter(Boolean)
+    tracks.forEach((t) => { t.on(TrackEvent.Muted, sync); t.on(TrackEvent.Unmuted, sync) })
+    const spk = (s) => setSpeaking(s)
+    participant.on?.(ParticipantEvent.IsSpeakingChanged, spk)
 
     return () => {
-      if (cam && camRef.current) cam.detach(camRef.current)
-      if (scr && screenRef.current) scr.detach(screenRef.current)
+      if (video && videoRef.current) video.detach(videoRef.current)
       if (mic && audioRef.current) mic.detach(audioRef.current)
-      cleanups.forEach((fn) => fn())
-      if (spk && participant.off) participant.off(ParticipantEvent.IsSpeakingChanged, spk)
+      tracks.forEach((t) => { t.off(TrackEvent.Muted, sync); t.off(TrackEvent.Unmuted, sync) })
+      participant.off?.(ParticipantEvent.IsSpeakingChanged, spk)
     }
-  }, [participant, version])
+  }, [participant, version, screen, isLocal])
 
-  useEffect(() => {
-    if (screenOn && screenRef.current) {
-      screenRef.current.play().catch(() => {})
-    }
-  }, [screenOn])
-
-  function toggleFullscreen() {
-    if (document.fullscreenElement) {
-      document.exitFullscreen()
-    } else if (screenRef.current) {
-      screenRef.current.requestFullscreen().catch(() => {})
-    }
+  function fullscreen() {
+    if (document.fullscreenElement) document.exitFullscreen()
+    else tileRef.current?.requestFullscreen?.().catch(() => {})
   }
 
-  const name = participant.identity || '—'
-  const initials = name.trim().slice(0, 2).toUpperCase()
-
+  const name = displayName || participant.name || participant.identity || 'Guest'
   return (
-    <div className={`tile ${speaking ? 'tile-speaking' : ''}`}>
-      <video ref={screenRef} autoPlay playsInline className="tile-screen" />
-      <video ref={camRef} autoPlay playsInline className={`tile-cam ${screenOn ? 'tile-cam-pip' : ''}`} />
-      <audio ref={audioRef} autoPlay />
-      {screenOn && (
-        <button className="tile-expand" onClick={toggleFullscreen} title="Enlarge screen">
-          <Expand />
-        </button>
-      )}
-      {!camOn && !screenOn && <div className="tile-avatar">{initials}</div>}
-      {screenOn && !camOn && <div className="tile-cam-pip-avatar">{initials}</div>}
-      <div className="tile-meta">
-        <span className="tile-name">{name}{isLocal ? ' (you)' : ''}</span>
-        {!micOn && <span className="tile-badge">muted</span>}
+    <div ref={tileRef} className={`tile ${speaking && !screen ? 'speaking' : ''}`}>
+      <video ref={videoRef} autoPlay playsInline muted
+             className={screen ? 'screen' : isLocal ? 'mirror' : ''}
+             style={{ display: videoOn ? 'block' : 'none' }} />
+      {!screen && <audio ref={audioRef} autoPlay />}
+      {!videoOn && <div className="tile-avatar"><Avatar name={name} size={96} /></div>}
+      <div className="tile-label">
+        {screen ? <Monitor size={14} /> : !micOn && <Mic off size={14} className="muted-ic" />}
+        <span>{screen ? `${name}’s screen` : `${name}${isLocal ? ' (you)' : ''}`}</span>
       </div>
+      {screen && (
+        <div className="tile-corner">
+          <button type="button" className="tile-btn" onClick={fullscreen} title="Full screen" aria-label="Full screen">
+            <Expand size={16} />
+          </button>
+        </div>
+      )}
     </div>
   )
 }

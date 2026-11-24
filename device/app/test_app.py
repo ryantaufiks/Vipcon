@@ -32,6 +32,7 @@ from security import hash_password  # noqa: E402
 
 LIVE = {}
 LAGGING = {}
+CLOSED = []
 
 
 @pytest.fixture(scope="module")
@@ -39,6 +40,7 @@ def client():
     # camelCase + string int64, as protojson emits; plus one room whose summary says 0 but has people.
     main.list_rooms = lambda: [{"name": n, "numParticipants": c, "creationTime": "1800000000"} for n, c in LIVE.items()]
     main.list_participants = lambda room: {"participants": [{"identity": "x"}] * LAGGING.get(room, 0)}
+    main.delete_room = lambda room: CLOSED.append(room)
     with TestClient(main.app) as c:
         db = main.SessionLocal()
         db.add(User(username="host", display_name="Host", password_hash=hash_password("host-password-1"), role="admin", active=True))
@@ -144,3 +146,32 @@ def test_wrong_passcodes_are_rate_limited_per_room(client):
     assert join("246810").status_code == 429  # even the right code waits out the window
     main.PASSCODE_FAILURES.clear()
     assert join("246810").status_code == 200
+
+
+def test_meeting_info_for_the_guest_join_page(client, monkeypatch):
+    monkeypatch.setattr(main, "MAX_CONCURRENT_MEETINGS", 100)
+    t = token(client)
+    auth = {"Authorization": f"Bearer {t}"}
+    m = client.post("/api/v1/meetings", json={"title": "Board review", "passcode": "135790", "lobby": True},
+                    headers=auth).json()
+    info = client.get(f"/api/v1/meeting-info?room={m['room_name']}").json()
+    assert info["title"] == "Board review" and info["has_passcode"] is True and info["lobby"] is True
+    assert "passcode" not in info and "room_name" not in info and "id" not in info
+    assert client.get("/api/v1/meeting-info?room=nope").status_code == 404
+    client.post(f"/api/v1/meetings/{m['id']}/end", headers=auth)
+    assert client.get(f"/api/v1/meeting-info?room={m['room_name']}").status_code == 404
+    assert CLOSED[-1] == m["room_name"]  # ending a meeting disconnects whoever is still in it
+
+
+def test_new_users_are_validated(client):
+    auth = {"Authorization": f"Bearer {token(client)}"}
+    add = lambda **kw: client.post("/api/v1/users", json={"username": "newhost", "password": "long-enough-pw",  # noqa: E731
+                                                           "role": "host", **kw}, headers=auth)
+    assert add(username="X").status_code == 422
+    assert add(password="short").status_code == 422
+    assert add(password="newhost").status_code == 422
+    assert add(role="admin").status_code == 422  # only one Client Admin, created at activation
+    assert add(username=" NewHost ", display_name="  New Host ").status_code == 200
+    users = {u["username"]: u for u in client.get("/api/v1/users", headers=auth).json()}
+    assert users["newhost"]["display_name"] == "New Host" and users["newhost"]["role"] == "host"
+    assert add().status_code == 409

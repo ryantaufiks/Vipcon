@@ -1,4 +1,5 @@
-import { Sun, Moon } from './icons.jsx'
+import { PublicLayout } from './ui.jsx'
+import { Download, Shield } from './icons.jsx'
 
 function detectOS() {
   const ua = navigator.userAgent
@@ -14,80 +15,67 @@ const OS_INFO = {
   windows: {
     name: 'Windows',
     download: '/api/v1/install-ca.bat',
-    steps: ['Download the installer', 'Right-click it → Run as administrator', 'Confirm the prompt'],
+    steps: ['Download the installer.', 'Right-click it and choose Run as administrator.', 'Confirm the prompt.'],
   },
   macos: {
     name: 'macOS',
     download: '/api/v1/ca.mobileconfig',
-    steps: ['Download the profile', 'Double-click the .mobileconfig', 'System Settings → General → Device Management → Install'],
+    steps: ['Download the profile.', 'Open the .mobileconfig file.', 'System Settings → General → Device Management → Install.'],
   },
   ios: {
-    name: 'iOS / iPadOS',
+    name: 'iPhone / iPad',
     download: '/api/v1/ca.mobileconfig',
-    steps: ['Download the profile', 'Settings → Profile Downloaded → Install', 'Settings → General → About → Certificate Trust Settings → enable full trust'],
+    steps: ['Download the profile.', 'Settings → Profile Downloaded → Install.', 'Settings → General → About → Certificate Trust Settings → turn on full trust.'],
   },
   android: {
     name: 'Android',
     download: '/api/v1/ca.crt',
-    steps: ['Download the certificate', 'Settings → Security → Install a certificate → CA certificate', 'Select the downloaded file'],
+    steps: ['Download the certificate.', 'Settings → Security → Install a certificate → CA certificate.', 'Choose the downloaded file.'],
   },
   linux: {
     name: 'Linux',
     download: '/api/v1/install-ca.sh',
-    steps: ['Download the installer', 'Run: sudo sh install-ca.sh'],
+    steps: ['Download the installer.', 'Run: sudo sh install-ca.sh'],
   },
   other: {
     name: 'this device',
     download: '/api/v1/ca.crt',
-    steps: ['Download the certificate', 'Install it into your system trust store'],
+    steps: ['Download the certificate.', 'Add it to your system’s trusted certificates.'],
   },
 }
 
-export default function Onboarding({ theme, onToggleTheme }) {
+// Shown at the device's root address: lets older setups trust the device's local certificate.
+export default function Onboarding() {
   const os = detectOS()
   const info = OS_INFO[os] || OS_INFO.other
 
   return (
-    <div className="onboarding">
-      <header className="topbar">
-        <div className="brand">VIP<span>CON</span></div>
-        <button className="icon-btn" onClick={onToggleTheme} title="Toggle theme">
-          {theme === 'dark' ? <Sun /> : <Moon />}
-        </button>
-      </header>
-
-      <div className="setup-card">
-        <h1>Secure this device</h1>
-        <p className="setup-sub">
-          Install the local certificate once so meetings open without browser warnings.
-        </p>
-
-        <div className="setup-os">
-          <span className="setup-os-label">Detected</span>
-          <span className="setup-os-name">{info.name}</span>
-        </div>
-
-        <a className="btn btn-primary setup-download" href={info.download}>
-          Download for {info.name}
-        </a>
-
-        <ol className="setup-steps">
-          {info.steps.map((s) => <li key={s}>{s}</li>)}
-        </ol>
-
-        <details className="setup-others">
-          <summary>Other platforms</summary>
-          <ul className="setup-links">
-            {Object.entries(OS_INFO)
-              .filter(([key]) => key !== os)
-              .map(([, v]) => (
-                <li key={v.name}><a href={v.download}>{v.name}</a></li>
+    <PublicLayout>
+      <div className="public-card" style={{ maxWidth: 500 }}>
+        <div className="card card-pad form">
+          <div className="state-icon brand" style={{ margin: 0 }}><Shield size={26} /></div>
+          <div>
+            <h1 className="page-title">Trust this VIPCON device</h1>
+            <p className="page-sub">Install the device’s certificate once, so meetings open without browser security warnings.</p>
+          </div>
+          <div className="os-pick">
+            <span><span className="subtle">Detected:</span> <strong>{info.name}</strong></span>
+          </div>
+          <a className="btn btn-primary btn-lg btn-block" href={info.download}><Download size={18} />Download for {info.name}</a>
+          <ol className="steps">
+            {info.steps.map((s) => <li key={s}>{s}</li>)}
+          </ol>
+          <details className="more">
+            <summary>Other platforms</summary>
+            <ul>
+              {Object.entries(OS_INFO).filter(([key]) => key !== os && key !== 'other').map(([key, v]) => (
+                <li key={key}><a className="btn btn-sm" href={v.download}>{v.name}</a></li>
               ))}
-          </ul>
-        </details>
-
-        <p className="setup-hint">After installing, open a meeting link (e.g. /m/room).</p>
+            </ul>
+          </details>
+          <p className="field-hint">Then open your meeting link again.</p>
+        </div>
       </div>
-    </div>
+    </PublicLayout>
   )
 }

@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react'
 import { meetingsNow } from './api.js'
-import { Sun, Moon } from './icons.jsx'
+import { PublicLayout, Notice, Spinner, EmptyState } from './ui.jsx'
+import { People, Lock, Shield, Video, DoorIn } from './icons.jsx'
+import { friendly } from './format.js'
 
 const REFRESH_MS = 5000
 
@@ -13,10 +15,10 @@ function since(iso) {
 }
 
 // The page behind the QR code on the device's screen: meetings in progress in this room.
-export default function Now({ theme, onToggleTheme }) {
-  const [meetings, setMeetings] = useState(null) // null = first load
-  const [error, setError] = useState('')
+export default function Now() {
+  const [meetings, setMeetings] = useState(null)
   const [adminUrl, setAdminUrl] = useState('')
+  const [error, setError] = useState('')
   const [, tick] = useState(0)
 
   useEffect(() => {
@@ -30,7 +32,7 @@ export default function Now({ theme, onToggleTheme }) {
         setAdminUrl(data.admin_url || '')
         setError('')
       } catch (err) {
-        if (alive) setError(err.message)
+        if (alive) setError(err.status === 403 ? err.message : friendly(err))
       }
     }
     load()
@@ -39,49 +41,44 @@ export default function Now({ theme, onToggleTheme }) {
   }, [])
 
   return (
-    <div className="prejoin">
-      <header className="topbar">
-        <div className="brand">VIP<span>CON</span></div>
-        <button className="icon-btn" onClick={onToggleTheme} title="Toggle theme">
-          {theme === 'dark' ? <Sun /> : <Moon />}
-        </button>
-      </header>
-      <div className="prejoin-card now-card">
-        <h1>Meetings in progress</h1>
-        <p className="setup-sub">Choose a meeting to join. This list updates automatically.</p>
-        {error && <p className="form-error" role="alert">{error}</p>}
-        {meetings === null && !error && <div className="room-connecting">Loading…</div>}
-        {meetings && meetings.length === 0 && (
-          <div className="now-empty">
-            <p>No meetings in progress right now.</p>
-            <p className="dash-meta">When a host starts a meeting it will appear here.</p>
+    <PublicLayout>
+      <div className="public-card" style={{ maxWidth: 560 }}>
+        <div className="card card-pad form">
+          <div>
+            <h1 className="page-title">Meetings in this room</h1>
+            <p className="page-sub">Choose a meeting to join. This list updates automatically.</p>
           </div>
-        )}
-        {meetings && meetings.length > 0 && (
-          <ul className="now-list">
-            {meetings.map((m) => (
-              <li key={m.room_name}>
-                <a className="now-item" href={`/m/${encodeURIComponent(m.room_name)}`}>
-                  <span className="now-live" aria-hidden="true" />
-                  <span className="now-main">
+          {error && <Notice kind="error">{error}</Notice>}
+          {meetings === null && !error && <div className="empty" style={{ padding: 24 }}><Spinner large /></div>}
+          {meetings && meetings.length === 0 && (
+            <EmptyState icon={<Video />} title="No meetings in progress">When a host starts a meeting, it appears here.</EmptyState>
+          )}
+          {meetings && meetings.length > 0 && (
+            <div className="now-list">
+              {meetings.map((m) => (
+                <a key={m.room_name} className="now-item" href={`/m/${encodeURIComponent(m.room_name)}`}>
+                  <div className="now-main">
                     <span className="now-title">{m.title}</span>
-                    <span className="dash-meta">
-                      {since(m.started_at)} · {m.participants} {m.participants === 1 ? 'person' : 'people'}
-                      {m.has_passcode ? ' · Passcode' : ''}{m.lobby ? ' · Host approval' : ''}
+                    <span className="row-meta">
+                      <span className="badge badge-live badge-dot">Live</span>
+                      <span className="chip"><People size={14} />{m.participants}</span>
+                      {m.has_passcode && <span className="chip"><Lock size={14} />Passcode</span>}
+                      {m.lobby && <span className="chip"><Shield size={14} />Host admits</span>}
                     </span>
-                  </span>
-                  <span className="btn btn-primary now-join">Join</span>
+                    <span className="field-hint">{since(m.started_at)}</span>
+                  </div>
+                  <span className="btn btn-primary btn-sm"><DoorIn size={16} />Join</span>
                 </a>
-              </li>
-            ))}
-          </ul>
-        )}
+              ))}
+            </div>
+          )}
+        </div>
         {adminUrl && (
-          <p className="now-host dash-meta">
-            Host? <a href={adminUrl}>Sign in</a> (office Wi‑Fi only)
+          <p className="field-hint" style={{ textAlign: 'center', marginTop: 16 }}>
+            Host? <a href={adminUrl}>Sign in</a> to start or manage meetings (office Wi‑Fi only).
           </p>
         )}
       </div>
-    </div>
+    </PublicLayout>
   )
 }

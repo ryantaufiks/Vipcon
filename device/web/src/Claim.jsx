@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react'
 import { claimDevice, claimStatus, saveAuth } from './api.js'
-import { Sun, Moon } from './icons.jsx'
+import { PublicLayout, Button, TextInput, PasswordInput, Notice, Spinner } from './ui.jsx'
+import { CheckCircle, Alert, Shield } from './icons.jsx'
+import { friendly } from './format.js'
 
 // Read the one-time code once, then drop it from the address bar so it does not
 // linger in browser history or get shared by copying the URL.
@@ -12,157 +14,118 @@ function takeClaimCode() {
 }
 
 const MIN_PASSWORD = 10
+const USERNAME_RE = /^[a-z0-9][a-z0-9._-]{2,31}$/
 
-export default function Claim({ theme, onToggleTheme }) {
+function StateCard({ icon, tone = '', title, children, action }) {
+  return (
+    <PublicLayout>
+      <div className="state-card">
+        <div className={`state-icon ${tone}`}>{icon}</div>
+        <h1 className="state-title">{title}</h1>
+        <div className="muted">{children}</div>
+        {action && <div className="state-actions">{action}</div>}
+      </div>
+    </PublicLayout>
+  )
+}
+
+export default function Claim() {
   const [code] = useState(takeClaimCode)
   const [status, setStatus] = useState(null) // null = loading
   const [orgName, setOrgName] = useState('')
   const [displayName, setDisplayName] = useState('')
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
-  const [confirm, setConfirm] = useState('')
+  const [confirmPw, setConfirmPw] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  const [errors, setErrors] = useState({})
   const [done, setDone] = useState(false)
 
   useEffect(() => {
-    claimStatus()
-      .then(setStatus)
-      .catch(() => setStatus({ claimed: false, unreachable: true }))
+    claimStatus().then(setStatus).catch(() => setStatus({ claimed: false, unreachable: true }))
   }, [])
 
   async function submit(e) {
     e.preventDefault()
     setError('')
     const user = username.trim().toLowerCase()
-    if (!/^[a-z0-9][a-z0-9._-]{2,31}$/.test(user)) {
-      setError('Username must be 3–32 characters: lowercase letters, numbers, dots, hyphens or underscores.')
-      return
-    }
-    if (password.length < MIN_PASSWORD) {
-      setError(`Password must be at least ${MIN_PASSWORD} characters.`)
-      return
-    }
-    if (password !== confirm) {
-      setError('Passwords do not match.')
-      return
-    }
+    const errs = {}
+    if (!displayName.trim()) errs.displayName = 'Enter your full name.'
+    if (!USERNAME_RE.test(user)) errs.username = '3–32 characters: lowercase letters, numbers, dots, hyphens or underscores.'
+    if (password.length < MIN_PASSWORD) errs.password = `At least ${MIN_PASSWORD} characters.`
+    else if (password.toLowerCase() === user) errs.password = 'The password must not be the username.'
+    if (!errs.password && password !== confirmPw) errs.confirm = 'The passwords do not match.'
+    setErrors(errs)
+    if (Object.keys(errs).length) return
     setBusy(true)
     try {
-      const data = await claimDevice({
-        claim_code: code,
-        username: user,
-        password,
-        display_name: displayName.trim(),
-        org_name: orgName.trim(),
-      })
+      const data = await claimDevice({ claim_code: code, username: user, password, display_name: displayName.trim(), org_name: orgName.trim() })
       saveAuth(data.token, data.username)
       setPassword('')
-      setConfirm('')
+      setConfirmPw('')
       setDone(true)
     } catch (err) {
-      setError(err.message)
+      setError(friendly(err))
     } finally {
       setBusy(false)
     }
   }
 
-  const header = (
-    <header className="topbar">
-      <div className="brand">VIP<span>CON</span></div>
-      <button className="icon-btn" onClick={onToggleTheme} title="Toggle theme">
-        {theme === 'dark' ? <Sun /> : <Moon />}
-      </button>
-    </header>
-  )
-
-  function Card({ title, children }) {
-    return (
-      <div className="prejoin">
-        {header}
-        <div className="prejoin-card">
-          <h1>{title}</h1>
-          {children}
-        </div>
-      </div>
-    )
-  }
-
   if (done) {
     return (
-      <Card title="Device activated">
-        <p className="setup-sub">
-          The Client Admin account <strong>{username.trim().toLowerCase()}</strong> has been created. From the
-          dashboard you can add users and create meetings.
-        </p>
-        <a className="btn btn-primary setup-download" href="/admin">Open dashboard</a>
-      </Card>
+      <StateCard icon={<CheckCircle size={26} />} tone="brand" title="Your VIPCON device is ready"
+                 action={<Button variant="primary" size="lg" onClick={() => { window.location.href = '/admin' }}>Open the console</Button>}>
+        The Client Admin account <strong>{username.trim().toLowerCase()}</strong> has been created. Next, add your hosts and
+        schedule your first meeting.
+      </StateCard>
     )
   }
-
   if (status === null) {
-    return <Card title="Activate Vipcon"><div className="room-connecting">Checking device…</div></Card>
+    return <PublicLayout><div className="state-card muted"><Spinner large />Checking the device…</div></PublicLayout>
   }
-
   if (status.claimed) {
     return (
-      <Card title="Already activated">
-        <p className="setup-sub">This device already has a Client Admin. Sign in with that account.</p>
-        <a className="btn btn-primary setup-download" href="/admin">Sign in</a>
-      </Card>
+      <StateCard icon={<Shield size={26} />} title="This device is already activated"
+                 action={<Button variant="primary" onClick={() => { window.location.href = '/admin' }}>Sign in</Button>}>
+        It already has a Client Admin. Sign in with that account.
+      </StateCard>
     )
   }
-
   if (!code) {
     return (
-      <Card title="Incomplete activation link">
-        <p className="setup-sub">
-          Touch the device's screen and scan the activation QR code again. The link must be opened directly from
-          that QR code.
-        </p>
-      </Card>
+      <StateCard icon={<Alert size={26} />} tone="danger" title="Incomplete activation link">
+        Touch the device’s screen and scan the activation QR code again. The link only works when opened straight from that code.
+      </StateCard>
     )
   }
 
   return (
-    <div className="prejoin">
-      {header}
-      <form className="prejoin-card" onSubmit={submit}>
-        <h1>Activate Vipcon</h1>
-        <p className="setup-sub">
-          Create the <strong>Client Admin</strong> account for this device. This account manages users and meetings,
-          and can only be created once.
-        </p>
-        {status.device_id && <p className="room-code">{status.device_id}</p>}
-        <label className="field">
-          <span className="field-label">Organisation name <em>optional</em></span>
-          <input value={orgName} onChange={(e) => setOrgName(e.target.value)} maxLength={100}
-                 placeholder="Example Pte Ltd" autoComplete="organization" />
-        </label>
-        <label className="field">
-          <span className="field-label">Full name</span>
-          <input value={displayName} onChange={(e) => setDisplayName(e.target.value)} maxLength={80}
-                 placeholder="Your name" autoComplete="name" required />
-        </label>
-        <label className="field">
-          <span className="field-label">Username</span>
-          <input value={username} onChange={(e) => setUsername(e.target.value)} maxLength={32}
-                 placeholder="admin" autoComplete="username" autoCapitalize="none" spellCheck={false} required />
-        </label>
-        <label className="field">
-          <span className="field-label">Password <em>min. {MIN_PASSWORD} characters</em></span>
-          <input type="password" value={password} onChange={(e) => setPassword(e.target.value)}
-                 autoComplete="new-password" minLength={MIN_PASSWORD} required />
-        </label>
-        <label className="field">
-          <span className="field-label">Confirm password</span>
-          <input type="password" value={confirm} onChange={(e) => setConfirm(e.target.value)}
-                 autoComplete="new-password" required />
-        </label>
-        {status.unreachable && <p className="form-info">The device is not responding. Make sure your phone is on the right network.</p>}
-        {error && <p className="form-error" role="alert">{error}</p>}
-        <button className="btn btn-primary" disabled={busy}>{busy ? 'Activating…' : 'Activate device'}</button>
-      </form>
-    </div>
+    <PublicLayout>
+      <div className="public-card" style={{ maxWidth: 480 }}>
+        <form className="card card-pad form" onSubmit={submit} noValidate>
+          <div>
+            <h1 className="page-title">Activate VIPCON</h1>
+            <p className="page-sub">
+              Create the <strong>Client Admin</strong> account. It manages people and meetings on this device, and can only be created once.
+            </p>
+          </div>
+          {status.device_id && <div className="os-pick"><span className="subtle">Device</span><span className="mono">{status.device_id}</span></div>}
+          <TextInput label="Organisation" optional value={orgName} onChange={(e) => setOrgName(e.target.value)} maxLength={100}
+                     placeholder="e.g. Example Holdings" autoComplete="organization" hint="Shown to guests on the join page." />
+          <TextInput label="Full name" value={displayName} onChange={(e) => setDisplayName(e.target.value)} maxLength={80}
+                     placeholder="Your name" autoComplete="name" error={errors.displayName} />
+          <TextInput label="Username" value={username} onChange={(e) => setUsername(e.target.value)} maxLength={32}
+                     placeholder="e.g. admin" autoComplete="username" autoCapitalize="none" spellCheck={false} error={errors.username} />
+          <PasswordInput label="Password" value={password} onChange={(e) => setPassword(e.target.value)}
+                         autoComplete="new-password" hint={`At least ${MIN_PASSWORD} characters.`} error={errors.password} />
+          <PasswordInput label="Confirm password" value={confirmPw} onChange={(e) => setConfirmPw(e.target.value)}
+                         autoComplete="new-password" error={errors.confirm} />
+          {status.unreachable && <Notice kind="warning">The device is not responding. Make sure your phone is on the office network.</Notice>}
+          {error && <Notice kind="error">{error}</Notice>}
+          <Button type="submit" variant="primary" size="lg" block loading={busy}>Activate device</Button>
+        </form>
+      </div>
+    </PublicLayout>
   )
 }

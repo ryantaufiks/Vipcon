@@ -1,4 +1,5 @@
 import hashlib
+import json
 import hmac
 import os
 import re
@@ -15,7 +16,7 @@ from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import sessionmaker
 
 from models import Base, LobbyRequest, Meeting, OrgSettings, User
-from livekit_admin import list_participants, list_rooms, mute_participant, remove_participant
+from livekit_admin import delete_room, list_participants, list_rooms, mute_participant, remove_participant
 from security import (
     create_session_token,
     decode_session_token,
@@ -357,6 +358,14 @@ def list_users(user=Depends(current_user), db=Depends(get_db)):
 @app.post("/api/v1/users")
 def create_user(req: UserCreate, user=Depends(current_user), db=Depends(get_db)):
     require_admin(user)
+    req.username = req.username.strip().lower()
+    if not USERNAME_RE.match(req.username):
+        raise HTTPException(422, "Username must be 3–32 characters: lowercase letters, numbers, dots, hyphens or underscores.")
+    if len(req.password) < MIN_PASSWORD or req.password.lower() == req.username:
+        raise HTTPException(422, f"Password must be at least {MIN_PASSWORD} characters and not the username.")
+    if req.role not in ("host", "member"):
+        raise HTTPException(422, "Role must be host or member.")
+    req.display_name = req.display_name.strip()[:80] or req.username
     if db.query(User).filter_by(username=req.username).first():
         raise HTTPException(409, "username exists")
     if db.query(User).count() >= MAX_USERS:
@@ -428,9 +437,20 @@ def delete_meeting(meeting_id: int, user=Depends(current_user), db=Depends(get_d
     m = db.query(Meeting).filter_by(id=meeting_id).first()
     if not m:
         raise HTTPException(404, "not found")
+    room_name = m.room_name
     db.delete(m)
     db.commit()
+    close_room(room_name)
     return {"ok": True}
+
+
+def close_room(room_name):
+    """Disconnect everyone still in an ended or deleted meeting (best effort: LiveKit may be down,
+    and a room nobody joined does not exist there)."""
+    try:
+        delete_room(room_name)
+    except Exception:
+        pass
 
 
 @app.post("/api/v1/meetings/{meeting_id}/end")
@@ -442,6 +462,7 @@ def end_meeting(meeting_id: int, user=Depends(current_user), db=Depends(get_db))
     m.status = "ended"
     m.ended_at = datetime.now(timezone.utc)
     db.commit()
+    close_room(m.room_name)
     return {"ok": True}
 
 
@@ -595,6 +616,25 @@ def passcode_blocked(room, failed=False):
         return len(recent) >= PASSCODE_MAX_FAILURES
 
 
+@app.get("/api/v1/meeting-info")
+def meeting_info(room: str, db=Depends(get_db)):
+    """What a guest's join page shows before joining: the meeting's title and what joining takes.
+    Only for people who already have the link (the room name is the secret part of it)."""
+    m = db.query(Meeting).filter_by(room_name=room).first()
+    if not m or m.status == "ended":
+        raise HTTPException(404, "This meeting link is not valid or the meeting has ended.")
+    org = db.query(OrgSettings).first()
+    return {
+        "title": m.title,
+        "org_name": (org.org_name if org else "") or "",
+        "scheduled_at": m.scheduled_at.isoformat() if m.scheduled_at else None,
+        "duration_minutes": m.duration_minutes,
+        "has_passcode": bool(m.passcode_hash),
+        "lobby": bool(m.lobby),
+        "locked": bool(m.locked),
+    }
+
+
 @app.post("/api/v1/join")
 def join(req: JoinRequest, db=Depends(get_db)):
     m = db.query(Meeting).filter_by(room_name=req.room).first()
@@ -652,7 +692,7 @@ def issue_livekit_token(identity, room, room_admin):
         "sub": identity,
         "nbf": now,
         "exp": now + 3600,
-        "metadata": '{"room":"%s"}' % room,
+        "metadata": json.dumps({"room": room, "host": bool(room_admin)}),
         "video": {
             "roomJoin": True,
             "room": room,

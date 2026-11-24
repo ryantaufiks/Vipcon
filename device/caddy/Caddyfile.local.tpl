@@ -38,7 +38,7 @@ http://:8081 {
 		reverse_proxy 127.0.0.1:7880
 	}
 
-	@guest_api path /api/v1/join /api/v1/lobby/status /api/v1/meetings/now
+	@guest_api path /api/v1/join /api/v1/lobby/status /api/v1/meetings/now /api/v1/meeting-info
 	handle @guest_api {
 		reverse_proxy 127.0.0.1:8000
 	}
