@@ -115,6 +115,14 @@ dt{color:var(--mute);font-size:14px}
 dd{font-weight:500}
 @media(max-width:860px){.split{grid-template-columns:minmax(0,1fr)}}
 .dimfig{position:relative;margin:0;border-radius:18px;overflow:hidden;border:1px solid var(--line);aspect-ratio:16/10;background:#0b0907}
+/* side by side, the picture takes the height of the spec list (the dimension overlay is sliced like the
+   photo, so it stays on the device) and the list gets a top rule, so both blocks share top and bottom edges */
+@media(min-width:861px){
+  .split{align-items:stretch}
+  .dimfig{aspect-ratio:auto;min-height:320px}
+  .split dl{align-content:start}
+  .split dt:first-of-type,.split dt:first-of-type+dd{border-top:1px solid var(--line)}
+}
 .dimfig img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;border:0;border-radius:0}
 .dimfig svg{position:absolute;inset:0;width:100%;height:100%}
 .dimfig .ext{stroke:rgba(255,255,255,.45);stroke-width:2}
