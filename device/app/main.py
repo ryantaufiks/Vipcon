@@ -19,7 +19,7 @@ from sqlalchemy.orm import sessionmaker
 
 import backup
 from models import Base, LobbyRequest, LocalAudit, Meeting, OrgSettings, RecoveryCode, User
-from livekit_admin import delete_room, list_participants, list_rooms, mute_participant, remove_participant
+from livekit_admin import delete_room, list_participants, list_rooms, mute_all, mute_participant, remove_participant
 from security import (
     create_session_token,
     decode_session_token,
@@ -72,6 +72,7 @@ ADDED_COLUMNS = [  # (table, column, SQL type and default), in the order they we
     ("users", "totp_pending", "VARCHAR"),
     ("users", "totp_last_step", "INTEGER DEFAULT 0"),
     ("org_settings", "require_2fa", "BOOLEAN DEFAULT 0"),
+    ("lobby_requests", "ticket_hash", "VARCHAR"),
 ]
 
 
@@ -258,6 +259,10 @@ class ModerateRequest(BaseModel):
 class MuteRequest(BaseModel):
     identity: str
     muted: bool = True
+
+
+class LockRequest(BaseModel):
+    locked: bool
 
 
 class SettingsRequest(BaseModel):
@@ -862,6 +867,12 @@ def kick_participant(meeting_id: int, req: ModerateRequest, user=Depends(current
     if not m:
         raise HTTPException(404, "not found")
     require_host_or_admin(user, m)
+    # Withdraw their admission first, so the waiting-room answer cannot let them straight back in.
+    # They may ask to join again, and the host decides again (or locks the meeting).
+    lr = db.query(LobbyRequest).filter_by(room_name=m.room_name, identity=req.identity).first()
+    if lr:
+        lr.status = "removed"
+    db.commit()
     try:
         remove_participant(m.room_name, req.identity)
     except Exception as e:
@@ -880,6 +891,34 @@ def mute_participant_endpoint(meeting_id: int, req: MuteRequest, user=Depends(cu
     except Exception as e:
         raise HTTPException(502, str(e))
     return {"ok": True}
+
+
+@app.post("/api/v1/meetings/{meeting_id}/moderate/mute-all")
+def mute_everyone(meeting_id: int, user=Depends(current_user), db=Depends(get_db)):
+    """Mute every microphone except the hosts' (moderators keep the floor). People can unmute
+    themselves: a host can never turn someone's microphone on."""
+    m = db.query(Meeting).filter_by(id=meeting_id).first()
+    if not m:
+        raise HTTPException(404, "not found")
+    require_host_or_admin(user, m)
+    try:
+        muted = mute_all(m.room_name)
+    except Exception as e:
+        raise HTTPException(502, str(e))
+    return {"ok": True, "muted": muted}
+
+
+@app.post("/api/v1/meetings/{meeting_id}/lock")
+def lock_meeting(meeting_id: int, req: LockRequest, user=Depends(current_user), db=Depends(get_db)):
+    """A locked meeting takes nobody new: guests cannot join or ask to join. People already in
+    stay, the host can still let in whoever was already waiting, and hosts can always enter."""
+    m = db.query(Meeting).filter_by(id=meeting_id).first()
+    if not m:
+        raise HTTPException(404, "not found")
+    require_host_or_admin(user, m)
+    m.locked = req.locked
+    db.commit()
+    return {"ok": True, "locked": bool(m.locked)}
 
 
 def _field(obj, snake, camel):
@@ -1000,26 +1039,33 @@ def join(req: JoinRequest, db=Depends(get_db)):
             passcode_blocked(m.room_name, failed=True)
             raise HTTPException(401, "invalid passcode")
     if m.lobby:
+        # A fresh ticket on every request: only the browser that asked can collect the admission, so
+        # nobody can take a guest's place by sending their name, and an old admission is not reusable.
+        ticket = secrets.token_urlsafe(24)
         existing = db.query(LobbyRequest).filter_by(room_name=m.room_name, identity=req.identity).first()
         if not existing:
-            db.add(LobbyRequest(room_name=m.room_name, identity=req.identity))
-            db.commit()
-        elif existing.status != "waiting":
-            existing.status = "waiting"
-            db.commit()
-        return {"status": "waiting"}
+            existing = LobbyRequest(room_name=m.room_name, identity=req.identity)
+            db.add(existing)
+        existing.status = "waiting"
+        existing.ticket_hash = ticket_hash(ticket)
+        db.commit()
+        return {"status": "waiting", "ticket": ticket}
     return issue_livekit_token(req.identity, m.room_name, room_admin=False)
 
 
+def ticket_hash(ticket):
+    return hashlib.sha256(ticket.encode()).hexdigest()
+
+
 @app.get("/api/v1/lobby/status")
-def lobby_status(room: str, identity: str, db=Depends(get_db)):
+def lobby_status(room: str, identity: str, ticket: str = "", db=Depends(get_db)):
     lr = db.query(LobbyRequest).filter_by(room_name=room, identity=identity).first()
-    if not lr:
-        return {"status": "waiting"}
+    if not lr or not lr.ticket_hash or not hmac.compare_digest(lr.ticket_hash, ticket_hash(ticket)):
+        raise HTTPException(403, "Ask to join again.")
     if lr.status == "admitted":
         return issue_livekit_token(identity, room, room_admin=False)
-    if lr.status == "rejected":
-        return {"status": "rejected"}
+    if lr.status in ("rejected", "removed"):
+        return {"status": lr.status}
     return {"status": "waiting"}
 
 
@@ -1047,7 +1093,9 @@ def issue_livekit_token(identity, room, room_admin):
         "iss": key,
         "sub": identity,
         "nbf": now,
-        "exp": now + 3600,
+        # Short-lived: LiveKit hands connected people fresh tokens, and a removed guest's old one
+        # soon stops working (LiveKit cannot revoke a token).
+        "exp": now + 600,
         "metadata": json.dumps({"room": room, "host": bool(room_admin)}),
         "video": {
             "roomJoin": True,

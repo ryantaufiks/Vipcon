@@ -20,6 +20,17 @@ function parseRoom() {
   return m ? decodeURIComponent(m[1]) : null
 }
 
+// Meeting tokens are short-lived (a removed guest's soon stops working). Rejoin reuses the token
+// while it is still good, and otherwise goes back through the join page for a new one.
+function tokenFresh(token) {
+  try {
+    const { exp } = JSON.parse(atob(token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')))
+    return exp * 1000 - Date.now() > 30000
+  } catch {
+    return false
+  }
+}
+
 function Meeting({ room, signedIn, asHost }) {
   // prejoin -> room -> left (and back to the room on "Rejoin")
   const [session, setSession] = useState(null)
@@ -28,7 +39,7 @@ function Meeting({ room, signedIn, asHost }) {
   if (left) {
     return (
       <Suspense fallback={<Loading />}>
-        <Left info={left} signedIn={signedIn} onRejoin={() => { setLeft(null); setSession(left.session) }} />
+        <Left info={left} signedIn={signedIn} onRejoin={() => { setLeft(null); setSession(tokenFresh(left.session.token) ? left.session : null) }} />
       </Suspense>
     )
   }

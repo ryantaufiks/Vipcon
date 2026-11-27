@@ -3,10 +3,10 @@ import { Room as LKRoom, RoomEvent, Track, DisconnectReason, ExternalE2EEKeyProv
 import VideoTile from './VideoTile.jsx'
 import { ChatPanel, PeoplePanel } from './Panels.jsx'
 import { Logo, Button, Menu, MenuItem, PublicLayout, useToast, useConfirm } from './ui.jsx'
-import { Mic, Camera, Screen, Chat, People, Leave, Stop, Alert, CheckCircle, Refresh, Wifi, LogOut, ArrowLeft } from './icons.jsx'
+import { Mic, Camera, Screen, Chat, People, Leave, Stop, Alert, CheckCircle, Refresh, Wifi, LogOut, ArrowLeft, Lock } from './icons.jsx'
 import { playJoin, playChat, playScreenShare } from './sound.js'
 import {
-  getToken, meetingByRoom, listLobby, admitLobby, rejectLobby, kickParticipant, muteParticipant, endMeeting,
+  getToken, meetingByRoom, listLobby, admitLobby, rejectLobby, kickParticipant, muteParticipant, muteAll, lockMeeting, endMeeting,
 } from './api.js'
 import { elapsed, friendly } from './format.js'
 
@@ -63,6 +63,8 @@ export default function Room({ session, onLeave }) {
   const [unread, setUnread] = useState(0)
   const [meetingId, setMeetingId] = useState(null)
   const [lobby, setLobby] = useState([])
+  const [locked, setLocked] = useState(false)
+  const selfMuteRef = useRef(false) // our own mic button, to tell it apart from the host muting us
   const seenLobby = useRef(new Set())
   const now = useNow()
 
@@ -103,7 +105,13 @@ export default function Room({ session, onLeave }) {
         if (pub?.source === Track.Source.ScreenShare) playScreenShare()
       })
       .on(RoomEvent.TrackUnsubscribed, refresh)
-      .on(RoomEvent.TrackMuted, refresh)
+      .on(RoomEvent.TrackMuted, (pub, participant) => {
+        refresh()
+        // A microphone muted without our own button press: the host muted us.
+        if (participant === room.localParticipant && pub?.source === Track.Source.Microphone && !selfMuteRef.current) {
+          toast({ kind: 'info', key: 'muted-by-host', message: 'The host muted your microphone. You can unmute when you need to speak.' })
+        }
+      })
       .on(RoomEvent.TrackUnmuted, refresh)
       .on(RoomEvent.TrackPublished, refresh)
       .on(RoomEvent.TrackUnpublished, refresh)
@@ -164,8 +172,9 @@ export default function Room({ session, onLeave }) {
     async function load() {
       try {
         if (!id) {
-          id = (await meetingByRoom(session.room, getToken())).id
-          if (!cancelled) setMeetingId(id)
+          const m = await meetingByRoom(session.room, getToken())
+          id = m.id
+          if (!cancelled) { setMeetingId(id); setLocked(!!m.locked) }
         }
         const l = await listLobby(getToken(), id)
         if (cancelled) return
@@ -205,7 +214,10 @@ export default function Room({ session, onLeave }) {
     const p = roomRef.current?.localParticipant
     if (!p) return
     try {
-      if (kind === 'mic') await p.setMicrophoneEnabled(!p.isMicrophoneEnabled)
+      if (kind === 'mic') {
+        selfMuteRef.current = true
+        try { await p.setMicrophoneEnabled(!p.isMicrophoneEnabled) } finally { setTimeout(() => { selfMuteRef.current = false }, 500) }
+      }
       if (kind === 'cam') await p.setCameraEnabled(!p.isCameraEnabled)
       if (kind === 'screen') await p.setScreenShareEnabled(!p.isScreenShareEnabled, { audio: true })
     } catch (e) {
@@ -241,9 +253,30 @@ export default function Room({ session, onLeave }) {
     for (const r of lobby) await admit(r.id)
   }
   async function kick(identity) {
-    const ok = await confirm({ title: `Remove ${identity}?`, message: 'They leave the meeting now. They can ask to join again if they still have the link.', confirmLabel: 'Remove', danger: true })
+    const ok = await confirm({
+      title: `Remove ${identity}?`, confirmLabel: 'Remove', danger: true,
+      message: locked
+        ? 'They leave the meeting now. The meeting is locked, so they cannot come back.'
+        : 'They leave the meeting now. If they ask to join again, you decide again. To keep everyone new out, lock the meeting.',
+    })
     if (!ok) return
-    try { await kickParticipant(getToken(), meetingId, identity) } catch (err) { toast({ kind: 'error', message: friendly(err) }) }
+    try {
+      await kickParticipant(getToken(), meetingId, identity)
+      toast({ message: `${identity} was removed.` })
+    } catch (err) { toast({ kind: 'error', message: friendly(err) }) }
+  }
+  async function muteEveryone() {
+    try {
+      const { muted } = await muteAll(getToken(), meetingId)
+      toast({ message: muted ? `Muted ${muted} ${muted === 1 ? 'person' : 'people'}. They can unmute themselves.` : 'Everyone was already muted.' })
+    } catch (err) { toast({ kind: 'error', message: friendly(err) }) }
+  }
+  async function setLock(next) {
+    try {
+      await lockMeeting(getToken(), meetingId, next)
+      setLocked(next)
+      toast({ message: next ? 'Meeting locked. No one new can join.' : 'Meeting unlocked. People with the link can join again.' })
+    } catch (err) { toast({ kind: 'error', message: friendly(err) }) }
   }
   async function mute(identity) {
     try {
@@ -304,6 +337,7 @@ export default function Room({ session, onLeave }) {
         <div className="room-info">
           <span className="room-title" title={title}>{title}</span>
         </div>
+        {session.isHost && locked && <span className="room-pill" title="No one new can join"><Lock size={14} />Locked</span>}
         <span className="room-pill"><People size={14} />{participants.length || 1}</span>
         <span className="room-pill hide-md">{elapsed(now - (session.joinedAt || now))}</span>
       </header>
@@ -332,6 +366,7 @@ export default function Room({ session, onLeave }) {
         {panel === 'chat' && <ChatPanel messages={messages} me={session.identity} onSend={sendMessage} onClose={() => setPanel(null)} />}
         {panel === 'people' && (
           <PeoplePanel participants={participants} localIdentity={session.identity} isHost={session.isHost} lobby={lobby}
+                       locked={locked} onMuteAll={muteEveryone} onLock={setLock}
                        onAdmit={admit} onReject={reject} onAdmitAll={admitAll} onKick={kick} onMute={mute}
                        onClose={() => setPanel(null)} />
         )}

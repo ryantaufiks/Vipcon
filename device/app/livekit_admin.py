@@ -1,3 +1,4 @@
+import json
 import os
 import time
 
@@ -59,19 +60,44 @@ def remove_participant(room, identity):
     return _rpc("RemoveParticipant", {"room": room, "identity": identity}, room)
 
 
+def _mic(participant):
+    """The participant's microphone track (not a screen share's audio), if they publish one."""
+    tracks = participant.get("tracks", [])
+    for t in tracks:
+        if t.get("source") in ("MICROPHONE", 2):
+            return t
+    for t in tracks:  # older servers may leave the source out
+        if t.get("type") in ("AUDIO", 1) and t.get("source") in (None, "UNKNOWN", 0):
+            return t
+    return None
+
+
+def _is_host(participant):
+    try:
+        return bool(json.loads(participant.get("metadata") or "{}").get("host"))
+    except ValueError:
+        return False
+
+
+def _mute(room, identity, track, muted=True):
+    return _rpc("MutePublishedTrack", {"room": room, "identity": identity, "track_sid": track.get("sid"), "muted": muted}, room)
+
+
 def mute_participant(room, identity, muted):
-    parts = list_participants(room).get("participants", [])
-    track_sid = None
-    for p in parts:
+    for p in list_participants(room).get("participants", []):
         if p.get("identity") == identity:
-            for t in p.get("tracks", []):
-                if t.get("type") == "AUDIO":
-                    track_sid = t.get("sid")
-                    break
-    if not track_sid:
-        raise Exception("microphone track not found")
-    return _rpc(
-        "MutePublishedTrack",
-        {"room": room, "identity": identity, "track_sid": track_sid, "muted": muted},
-        room,
-    )
+            mic = _mic(p)
+            if mic:
+                return _mute(room, identity, mic, muted)
+    raise Exception("microphone track not found")
+
+
+def mute_all(room):
+    """Mute every unmuted microphone except the hosts'. Returns how many were muted."""
+    count = 0
+    for p in list_participants(room).get("participants", []):
+        mic = _mic(p)
+        if mic and not mic.get("muted") and not _is_host(p):
+            _mute(room, p.get("identity"), mic)
+            count += 1
+    return count
