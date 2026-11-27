@@ -1,3 +1,4 @@
+import base64
 import hashlib
 import json
 import hmac
@@ -15,7 +16,8 @@ from pydantic import BaseModel
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import sessionmaker
 
-from models import Base, LobbyRequest, Meeting, OrgSettings, User
+import backup
+from models import Base, LobbyRequest, LocalAudit, Meeting, OrgSettings, RecoveryCode, User
 from livekit_admin import delete_room, list_participants, list_rooms, mute_participant, remove_participant
 from security import (
     create_session_token,
@@ -51,14 +53,27 @@ def get_db():
 def startup():
     Base.metadata.create_all(engine)
     migrate()
+    if os.environ.get("BACKUP_SCHEDULER", "1") == "1":
+        threading.Thread(target=backup_scheduler, daemon=True).start()
+
+
+ADDED_COLUMNS = [  # (table, column, SQL type and default), in the order they were introduced
+    ("meetings", "show_on_screen", "BOOLEAN DEFAULT 1"),
+    ("users", "token_version", "INTEGER DEFAULT 0"),
+    ("org_settings", "screen_reset", "BOOLEAN DEFAULT 1"),
+    ("org_settings", "screen_reset_used", "VARCHAR"),
+    ("local_audit", "detail", "VARCHAR"),
+    ("org_settings", "session_epoch", "VARCHAR"),
+]
 
 
 def migrate():
     """Add columns introduced after a device was first provisioned (create_all only adds tables)."""
-    cols = {c["name"] for c in inspect(engine).get_columns("meetings")}
-    if "show_on_screen" not in cols:
-        with engine.begin() as conn:
-            conn.execute(text("ALTER TABLE meetings ADD COLUMN show_on_screen BOOLEAN DEFAULT 1"))
+    insp = inspect(engine)
+    for table, column, ddl in ADDED_COLUMNS:
+        if column not in {c["name"] for c in insp.get_columns(table)}:
+            with engine.begin() as conn:
+                conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}"))
 
 
 def require_admin(user):
@@ -81,7 +96,20 @@ def current_user(authorization: str = Header(None), db=Depends(get_db)):
     user = db.query(User).filter_by(id=int(payload["sub"])).first()
     if not user or not user.active:
         raise HTTPException(401, "unknown user")
+    if int(payload.get("v", 0)) != (user.token_version or 0):  # password changed since: sign in again
+        raise HTTPException(401, "invalid token")
+    if payload.get("e", "") != session_epoch(db):  # the data was restored from a backup since
+        raise HTTPException(401, "invalid token")
     return user
+
+
+def session_epoch(db):
+    s = db.query(OrgSettings).first()
+    return (s.session_epoch if s else None) or ""
+
+
+def session_token(user, db):
+    return create_session_token(user.id, user.token_version or 0, session_epoch(db))
 
 
 SITE_FILE = os.environ.get("SITE_FILE", "/etc/appliance/site_fqdn")
@@ -216,12 +244,17 @@ class SettingsRequest(BaseModel):
     org_name: str = None
     logo_path: str = None
     theme: dict = None
+    screen_reset: bool = None
 
 
 @app.get("/healthz")
 def healthz(db=Depends(get_db)):
-    # "claimed" is read by the LCD kiosk to decide whether to offer the claim QR.
-    return {"ok": True, "claimed": db.query(User).first() is not None}
+    # Read by the LCD kiosk: "claimed" decides whether to offer the claim QR; "screen_reset" whether
+    # a long press may show an admin reset code, and "screen_reset_used" tells it the code was spent.
+    s = db.query(OrgSettings).first()
+    return {"ok": True, "claimed": db.query(User).first() is not None,
+            "screen_reset": not (s and s.screen_reset is False),
+            "screen_reset_used": (s.screen_reset_used if s else None) or ""}
 
 
 @app.get("/api/v1/ca.pem")
@@ -317,8 +350,11 @@ def claim(req: ClaimRequest, db=Depends(get_db)):
             settings = db.query(OrgSettings).first() or OrgSettings()
             settings.org_name = org_name
             db.add(settings)
+        db.flush()
+        codes = new_recovery_codes(db, user)  # the Recovery Kit, shown once on the next screen
+        audit(db, user, "device.claimed")
         db.commit()
-    return {"ok": True, "token": create_session_token(user.id), "username": username}
+    return {"ok": True, "token": session_token(user, db), "username": username, "recovery_codes": codes}
 
 
 @app.post("/api/v1/login")
@@ -338,7 +374,7 @@ def login(req: LoginRequest, db=Depends(get_db)):
     user.failed_attempts = 0
     user.last_login = datetime.now(timezone.utc)
     db.commit()
-    return {"token": create_session_token(user.id), "user": {"id": user.id, "username": user.username, "role": user.role}}
+    return {"token": session_token(user, db), "user": {"id": user.id, "username": user.username, "role": user.role}}
 
 
 @app.get("/api/v1/me")
@@ -363,8 +399,9 @@ def create_user(req: UserCreate, user=Depends(current_user), db=Depends(get_db))
         raise HTTPException(422, "Username must be 3–32 characters: lowercase letters, numbers, dots, hyphens or underscores.")
     if len(req.password) < MIN_PASSWORD or req.password.lower() == req.username:
         raise HTTPException(422, f"Password must be at least {MIN_PASSWORD} characters and not the username.")
-    if req.role not in ("host", "member"):
-        raise HTTPException(422, "Role must be host or member.")
+    # A second Client Admin is the easiest way back in when one forgets their password.
+    if req.role not in ("admin", "host", "member"):
+        raise HTTPException(422, "Role must be admin, host or member.")
     req.display_name = req.display_name.strip()[:80] or req.username
     if db.query(User).filter_by(username=req.username).first():
         raise HTTPException(409, "username exists")
@@ -372,6 +409,7 @@ def create_user(req: UserCreate, user=Depends(current_user), db=Depends(get_db))
         raise HTTPException(429, f"user limit reached ({MAX_USERS})")
     u = User(username=req.username, display_name=req.display_name, password_hash=hash_password(req.password), role=req.role, active=True)
     db.add(u)
+    audit(db, user, "user.created", f"{req.username} ({req.role})")
     db.commit()
     return {"id": u.id}
 
@@ -384,9 +422,268 @@ def delete_user(user_id: int, user=Depends(current_user), db=Depends(get_db)):
     u = db.query(User).filter_by(id=user_id).first()
     if not u:
         raise HTTPException(404, "not found")
+    db.query(RecoveryCode).filter_by(user_id=u.id).delete()
+    audit(db, user, "user.removed", u.username)
     db.delete(u)
     db.commit()
     return {"ok": True}
+
+
+# ---------------------------------------------------------------- passwords and account recovery
+#
+# Ways back in, lightest first:
+#   1. change your own password (signed in)
+#   2. a Client Admin resets anyone else's password
+#   3. a Recovery Kit code (8 one-time codes, shown once when the device is activated or when an
+#      admin makes a new kit) sets a new admin password without signing in
+#   4. a code shown on the device's own touch screen after a long press (proof of physical
+#      access; the admin can switch this off)
+#   5. factory reset
+# There is deliberately no reset through the vendor: nothing outside the building can unlock it.
+# Every one of these ends the account's other sessions and is written to the device's audit log.
+
+RECOVERY_ALPHABET = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ"  # no 0/O or 1/I to misread
+RECOVERY_CODES = 8
+SCREEN_RESET_FILE = os.environ.get("SCREEN_RESET_FILE", "/etc/appliance/kiosk/admin_reset.json")
+SCREEN_RESET_MAX_FAILURES = 5
+
+
+class PasswordChange(BaseModel):
+    current_password: str
+    new_password: str
+
+
+class PasswordSet(BaseModel):
+    new_password: str
+
+
+class ConfirmPassword(BaseModel):
+    password: str
+
+
+class RecoveryReset(BaseModel):
+    username: str
+    code: str
+    new_password: str
+
+
+class ScreenReset(BaseModel):
+    username: str
+    code: str
+    new_password: str
+
+
+class Limiter:
+    """Failures per key within a window, in memory (a restart forgets them, which is fine)."""
+
+    def __init__(self, max_failures, window):
+        self.max, self.window, self.hits, self.lock = max_failures, window, {}, threading.Lock()
+
+    def blocked(self, key):
+        with self.lock:
+            now = time.time()
+            recent = [t for t in self.hits.get(key, []) if now - t < self.window]
+            self.hits[key] = recent
+            return len(recent) >= self.max
+
+    def fail(self, key):
+        with self.lock:
+            self.hits.setdefault(key, []).append(time.time())
+
+    def clear(self, key):
+        with self.lock:
+            self.hits.pop(key, None)
+
+
+RECOVERY_LIMIT = Limiter(5, 900)  # per username
+RECOVERY_LIMIT_ALL = Limiter(30, 900)  # across all usernames
+
+
+def audit(db, actor, action, detail=None):
+    db.add(LocalAudit(user_id=actor.id if actor else None, action=action, detail=(detail or "")[:200] or None))
+
+
+def check_new_password(username, password):
+    if len(password) < MIN_PASSWORD:
+        raise HTTPException(422, f"Password must be at least {MIN_PASSWORD} characters.")
+    if password.lower() == username.lower():
+        raise HTTPException(422, "Password must not be the same as the username.")
+
+
+def set_password(user, password):
+    """New password: unlock the account and end every existing session."""
+    user.password_hash = hash_password(password)
+    user.token_version = (user.token_version or 0) + 1
+    user.failed_attempts = 0
+    user.locked_until = None
+
+
+def office_only(request):
+    if from_internet(request):
+        raise HTTPException(403, "office network only")
+
+
+def normalize_code(code):
+    return re.sub(r"[^A-Z0-9]", "", (code or "").upper())
+
+
+def new_recovery_codes(db, user):
+    """Replace the user's Recovery Kit; returns the codes in readable form (XXXXX-XXXXX)."""
+    db.query(RecoveryCode).filter_by(user_id=user.id).delete()
+    codes = []
+    for _ in range(RECOVERY_CODES):
+        raw = "".join(secrets.choice(RECOVERY_ALPHABET) for _ in range(10))
+        db.add(RecoveryCode(user_id=user.id, code_hash=hash_password(raw)))
+        codes.append(f"{raw[:5]}-{raw[5:]}")
+    return codes
+
+
+_DUMMY = []
+
+
+def dummy_hash():
+    if not _DUMMY:
+        _DUMMY.append(hash_password(secrets.token_hex(8)))
+    return _DUMMY[0]
+
+
+def recovery_remaining(db, user):
+    return db.query(RecoveryCode).filter_by(user_id=user.id, used_at=None).count()
+
+
+@app.post("/api/v1/me/password")
+def change_password(req: PasswordChange, user=Depends(current_user), db=Depends(get_db)):
+    if not verify_password(req.current_password, user.password_hash):
+        raise HTTPException(401, "current password incorrect")
+    check_new_password(user.username, req.new_password)
+    set_password(user, req.new_password)
+    audit(db, user, "password.changed")
+    db.commit()
+    return {"ok": True, "token": session_token(user, db)}  # this browser stays signed in
+
+
+@app.post("/api/v1/users/{user_id}/password")
+def reset_user_password(user_id: int, req: PasswordSet, user=Depends(current_user), db=Depends(get_db)):
+    require_admin(user)
+    if user_id == user.id:
+        raise HTTPException(400, "use change password for your own account")
+    u = db.query(User).filter_by(id=user_id).first()
+    if not u:
+        raise HTTPException(404, "not found")
+    check_new_password(u.username, req.new_password)
+    set_password(u, req.new_password)
+    audit(db, user, "password.reset_by_admin", u.username)
+    db.commit()
+    return {"ok": True}
+
+
+@app.get("/api/v1/me/recovery-codes")
+def recovery_status(user=Depends(current_user), db=Depends(get_db)):
+    require_admin(user)
+    latest = db.query(RecoveryCode).filter_by(user_id=user.id).order_by(RecoveryCode.id.desc()).first()
+    return {"remaining": recovery_remaining(db, user), "total": RECOVERY_CODES,
+            "created_at": latest.created_at.isoformat() if latest and latest.created_at else None}
+
+
+@app.post("/api/v1/me/recovery-codes")
+def regenerate_recovery_codes(req: ConfirmPassword, user=Depends(current_user), db=Depends(get_db)):
+    """A new Recovery Kit; the old codes stop working. Needs the password again."""
+    require_admin(user)
+    if not verify_password(req.password, user.password_hash):
+        raise HTTPException(401, "current password incorrect")
+    codes = new_recovery_codes(db, user)
+    audit(db, user, "recovery_codes.generated")
+    db.commit()
+    return {"codes": codes}
+
+
+@app.post("/api/v1/recovery/reset")
+def recovery_reset(req: RecoveryReset, request: Request, db=Depends(get_db)):
+    """Forgot password: a Recovery Kit code sets a new one. Office network only, rate limited."""
+    office_only(request)
+    username = req.username.strip().lower()
+    if RECOVERY_LIMIT.blocked(username) or RECOVERY_LIMIT_ALL.blocked("all"):
+        raise HTTPException(429, "too many attempts")
+    code = normalize_code(req.code)
+    user = db.query(User).filter_by(username=username).first()
+    match = None
+    if user and user.active and user.role == "admin" and len(code) == 10:
+        for rc in db.query(RecoveryCode).filter_by(user_id=user.id, used_at=None).all():
+            if verify_password(code, rc.code_hash):
+                match = rc
+                break
+    else:
+        verify_password(code, dummy_hash())  # same work either way: no hint which usernames exist
+    if not match:
+        RECOVERY_LIMIT.fail(username)
+        RECOVERY_LIMIT_ALL.fail("all")
+        raise HTTPException(401, "invalid recovery code")
+    check_new_password(username, req.new_password)
+    match.used_at = datetime.now(timezone.utc)
+    set_password(user, req.new_password)
+    audit(db, user, "password.reset.recovery_code", f"{recovery_remaining(db, user)} codes left")
+    db.commit()
+    RECOVERY_LIMIT.clear(username)
+    return {"ok": True, "remaining": recovery_remaining(db, user)}
+
+
+def screen_reset_offer():
+    """The code the touch screen is showing, as the kiosk wrote it: a hash, never the code."""
+    try:
+        with open(SCREEN_RESET_FILE) as f:
+            offer = json.load(f)
+        if offer.get("expires_at", 0) > time.time():
+            return offer
+    except (OSError, ValueError):
+        pass
+    return None
+
+
+SCREEN_FAILURES = {}
+
+
+@app.post("/api/v1/recovery/screen")
+def screen_reset(req: ScreenReset, request: Request, db=Depends(get_db)):
+    """Last resort: the code on the device's touch screen (shown after a long press) sets a new
+    admin password. Needs someone at the device and on the office network."""
+    office_only(request)
+    settings = db.query(OrgSettings).first()
+    if settings and settings.screen_reset is False:
+        raise HTTPException(403, "screen reset disabled")
+    offer = screen_reset_offer()
+    if not offer or (settings and settings.screen_reset_used == offer.get("nonce")):
+        raise HTTPException(410, "no reset code on screen")
+    nonce = offer["nonce"]
+    username = req.username.strip().lower()
+    user = db.query(User).filter_by(username=username).first()
+    code = re.sub(r"\D", "", req.code or "")
+    digest = hashlib.sha256((offer["salt"] + code).encode()).hexdigest()
+    if not (user and user.active and user.role == "admin" and hmac.compare_digest(digest, offer["hash"])):
+        SCREEN_FAILURES[nonce] = SCREEN_FAILURES.get(nonce, 0) + 1
+        if SCREEN_FAILURES[nonce] >= SCREEN_RESET_MAX_FAILURES:  # burn the code: hold the screen again
+            settings = settings or OrgSettings()
+            settings.screen_reset_used = nonce
+            db.add(settings)
+            audit(db, None, "password.reset.device_screen_burned", "too many wrong codes")
+            db.commit()
+        raise HTTPException(401, "invalid screen code")
+    check_new_password(username, req.new_password)
+    settings = settings or OrgSettings()
+    settings.screen_reset_used = nonce
+    db.add(settings)
+    set_password(user, req.new_password)
+    audit(db, user, "password.reset.device_screen")
+    db.commit()
+    return {"ok": True}
+
+
+@app.get("/api/v1/security/events")
+def security_events(user=Depends(current_user), db=Depends(get_db)):
+    require_admin(user)
+    names = {u.id: u.username for u in db.query(User).all()}
+    rows = db.query(LocalAudit).order_by(LocalAudit.id.desc()).limit(30).all()
+    return [{"at": r.ts.isoformat() if r.ts else None, "action": r.action, "user": names.get(r.user_id), "detail": r.detail}
+            for r in rows]
 
 
 @app.post("/api/v1/meetings")
@@ -726,8 +1023,8 @@ def issue_livekit_token(identity, room, room_admin):
 def get_settings(user=Depends(current_user), db=Depends(get_db)):
     s = db.query(OrgSettings).first()
     if not s:
-        return {"org_name": "", "logo_path": "", "theme": {}}
-    return {"org_name": s.org_name, "logo_path": s.logo_path, "theme": s.theme}
+        return {"org_name": "", "logo_path": "", "theme": {}, "screen_reset": True}
+    return {"org_name": s.org_name, "logo_path": s.logo_path, "theme": s.theme, "screen_reset": s.screen_reset is not False}
 
 
 @app.post("/api/v1/settings")
@@ -743,5 +1040,129 @@ def set_settings(req: SettingsRequest, user=Depends(current_user), db=Depends(ge
         s.logo_path = req.logo_path
     if req.theme is not None:
         s.theme = req.theme
+    if req.screen_reset is not None and req.screen_reset != (s.screen_reset is not False):
+        s.screen_reset = req.screen_reset
+        audit(db, user, "screen_reset.enabled" if req.screen_reset else "screen_reset.disabled")
     db.commit()
     return {"ok": True}
+
+
+# ---------------------------------------------------------------- encrypted off-site backup (opt-in)
+#
+# See backup.py. Turning it on needs the admin's password and shows the Backup Key once; the device
+# keeps the key (outside the database, so a backup never carries its own key) and backs up daily.
+# Restoring needs the Backup Key and the signed-in admin's password, replaces every account,
+# meeting and setting, and ends every session (a new session epoch).
+
+DB_PATH = DATABASE_URL.split("sqlite:///", 1)[1] if DATABASE_URL.startswith("sqlite:///") else ""
+_backup_lock = threading.Lock()
+
+
+class BackupRestore(BaseModel):
+    backup_key: str
+    password: str
+
+
+def backup_remote():
+    return backup.Remote(CONTROL_PLANE_URL, DEVICE_ID)
+
+
+def backup_scheduler():
+    """Daily backup while it is switched on (first check a few minutes after start)."""
+    time.sleep(300)
+    while True:
+        try:
+            if backup.due():
+                with _backup_lock:
+                    backup.run(DB_PATH, backup_remote())
+        except Exception as e:  # never let the thread die
+            print("backup scheduler:", e, flush=True)
+        time.sleep(1800)
+
+
+@app.get("/api/v1/backup")
+def backup_status(user=Depends(current_user)):
+    require_admin(user)
+    return {**backup.public_status(backup.load_state()), "available": bool(CONTROL_PLANE_URL and DEVICE_ID)}
+
+
+@app.post("/api/v1/backup/enable")
+def backup_enable(req: ConfirmPassword, user=Depends(current_user), db=Depends(get_db)):
+    require_admin(user)
+    if not verify_password(req.password, user.password_hash):
+        raise HTTPException(401, "current password incorrect")
+    with _backup_lock:
+        if backup.load_state().get("enabled"):
+            raise HTTPException(409, "backup already on")
+        locator, key = backup.new_key()
+        backup.save_state({"enabled": True, "locator": locator, "key": base64.b64encode(key).decode()})
+        audit(db, user, "backup.enabled")
+        db.commit()
+        status = backup.run(DB_PATH, backup_remote())
+    return {"backup_key": backup.encode_key(locator, key), "status": status}
+
+
+@app.post("/api/v1/backup/run")
+def backup_now(user=Depends(current_user)):
+    require_admin(user)
+    with _backup_lock:
+        try:
+            return backup.run(DB_PATH, backup_remote())
+        except backup.BackupError as e:
+            raise HTTPException(409, str(e))
+
+
+@app.post("/api/v1/backup/disable")
+def backup_disable(req: ConfirmPassword, user=Depends(current_user), db=Depends(get_db)):
+    """Switch off and delete the copies kept off-site (best effort if the service is unreachable)."""
+    require_admin(user)
+    if not verify_password(req.password, user.password_hash):
+        raise HTTPException(401, "current password incorrect")
+    with _backup_lock:
+        state = backup.load_state()
+        removed = True
+        if state.get("locator"):
+            try:
+                backup_remote().delete(state["locator"])
+            except backup.BackupError:
+                removed = False
+        backup.forget_state()
+        audit(db, user, "backup.disabled", None if removed else "off-site copies could not be deleted")
+        db.commit()
+    return {"ok": True, "remote_deleted": removed}
+
+
+@app.post("/api/v1/backup/restore")
+def backup_restore(req: BackupRestore, user=Depends(current_user), db=Depends(get_db)):
+    require_admin(user)
+    if not verify_password(req.password, user.password_hash):
+        raise HTTPException(401, "current password incorrect")
+    try:
+        locator, key = backup.decode_key(req.backup_key)
+    except backup.BackupError as e:
+        raise HTTPException(422, str(e))
+    if not DB_PATH:
+        raise HTTPException(503, "restore needs the device database")
+    who = user.username
+    with _backup_lock:
+        try:
+            path = backup.download(backup_remote(), locator, key)
+        except backup.BackupError as e:
+            raise HTTPException(409, str(e))
+        db.close()
+        engine.dispose()
+        os.replace(path, DB_PATH)
+        migrate()  # the backup may predate some columns
+        fresh = SessionLocal()
+        try:
+            settings = fresh.query(OrgSettings).first() or OrgSettings()
+            settings.session_epoch = secrets.token_hex(8)  # every session, old or restored, ends
+            fresh.add(settings)
+            fresh.add(LocalAudit(user_id=None, action="backup.restored", detail=f"by {who}"))
+            fresh.commit()
+            admins = fresh.query(User).filter_by(role="admin", active=True).count()
+        finally:
+            fresh.close()
+        # Carry on backing up the restored data to the same place, with the same key.
+        backup.save_state({"enabled": True, "locator": locator, "key": base64.b64encode(key).decode()})
+    return {"ok": True, "admins": admins}

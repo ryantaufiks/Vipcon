@@ -59,6 +59,11 @@ TLS_DIR = env("TLS_DIR", "/tls")
 # served; the superadmin console answers on any other host (e.g. console.<ROOT_DOMAIN>).
 SITE_HOSTS = {h.strip().lower() for h in env("SITE_HOSTS", f"{ROOT_DOMAIN},www.{ROOT_DOMAIN}").split(",") if h.strip()}
 SITE_CONTACT_EMAIL = env("SITE_CONTACT_EMAIL", "")
+# Device data backups: sealed (AES-256-GCM) on the device with a key only the client holds; stored
+# here as opaque files, one folder per backup locator (a random id that is part of the client's key).
+DEVICE_BACKUP_DIR = env("DEVICE_BACKUP_DIR", "/data/device-backups")
+DEVICE_BACKUP_MAX_BYTES = int(env("DEVICE_BACKUP_MAX_BYTES", str(25 * 1024 * 1024)))
+DEVICE_BACKUP_KEEP = int(env("DEVICE_BACKUP_KEEP", "7"))
 
 if not SECRET_KEY:
     raise RuntimeError("SECRET_KEY is required (generate one with: openssl rand -hex 32)")

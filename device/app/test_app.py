@@ -10,7 +10,8 @@ import tempfile
 
 TMP = tempfile.mkdtemp()
 os.environ.update(DATABASE_URL=f"sqlite:///{TMP}/app.db", SESSION_SECRET="test-session-secret",
-                  DEVICE_ID="dev_test", ROOT_DOMAIN="example.test")
+                  DEVICE_ID="dev_test", ROOT_DOMAIN="example.test", BACKUP_SCHEDULER="0",
+                  BACKUP_STATE_FILE=f"{TMP}/backup.json")
 sys.path.insert(0, os.path.dirname(__file__))
 
 # A database from before show_on_screen existed, to exercise the startup migration.
@@ -171,7 +172,7 @@ def test_new_users_are_validated(client):
     assert add(username="X").status_code == 422
     assert add(password="short").status_code == 422
     assert add(password="newhost").status_code == 422
-    assert add(role="admin").status_code == 422  # only one Client Admin, created at activation
+    assert add(role="owner").status_code == 422
     assert add(username=" NewHost ", display_name="  New Host ").status_code == 200
     users = {u["username"]: u for u in client.get("/api/v1/users", headers=auth).json()}
     assert users["newhost"]["display_name"] == "New Host" and users["newhost"]["role"] == "host"
@@ -216,3 +217,231 @@ def test_console_join_by_role(client, monkeypatch):
 
     client.post(f"/api/v1/meetings/{m['id']}/end", headers=auth["hosta"])
     assert join(auth["staff1"]).status_code == 410
+
+
+# ---------------------------------------------------------------- passwords and recovery
+
+
+def add_user(client, name, role, password=None):
+    admin = {"Authorization": f"Bearer {token(client)}"}
+    r = client.post("/api/v1/users", json={"username": name, "password": password or f"{name}-password-1", "role": role},
+                    headers=admin)
+    assert r.status_code == 200, r.text
+    return r.json()["id"]
+
+
+def sign_in(client, name, password=None):
+    r = client.post("/api/v1/login", json={"username": name, "password": password or f"{name}-password-1"})
+    assert r.status_code == 200, r.text
+    return {"Authorization": "Bearer " + r.json()["token"]}
+
+
+def test_change_own_password_ends_other_sessions(client):
+    add_user(client, "pwchange", "host")
+    old, other = sign_in(client, "pwchange"), sign_in(client, "pwchange")
+    r = client.post("/api/v1/me/password", json={"current_password": "wrong-password", "new_password": "a-new-password-1"},
+                    headers=old)
+    assert r.status_code == 401
+    assert client.post("/api/v1/me/password", json={"current_password": "pwchange-password-1", "new_password": "short"},
+                       headers=old).status_code == 422
+    r = client.post("/api/v1/me/password", json={"current_password": "pwchange-password-1",
+                                                  "new_password": "a-new-password-1"}, headers=old)
+    assert r.status_code == 200
+    assert client.get("/api/v1/me", headers=other).status_code == 401  # the other browser is signed out
+    assert client.get("/api/v1/me", headers={"Authorization": "Bearer " + r.json()["token"]}).status_code == 200
+    sign_in(client, "pwchange", "a-new-password-1")
+
+
+def test_admin_resets_another_users_password(client):
+    uid = add_user(client, "forgetful", "member")
+    theirs = sign_in(client, "forgetful")
+    admin = {"Authorization": f"Bearer {token(client)}"}
+    me_id = client.get("/api/v1/me", headers=admin).json()["id"]
+    assert client.post(f"/api/v1/users/{me_id}/password", json={"new_password": "x" * 12}, headers=admin).status_code == 400
+    assert client.post(f"/api/v1/users/{uid}/password", json={"new_password": "temporary-pw-1"}, headers=theirs).status_code == 403
+    assert client.post(f"/api/v1/users/{uid}/password", json={"new_password": "temporary-pw-1"}, headers=admin).status_code == 200
+    assert client.get("/api/v1/me", headers=theirs).status_code == 401
+    sign_in(client, "forgetful", "temporary-pw-1")
+    events = client.get("/api/v1/security/events", headers=admin).json()
+    assert any(e["action"] == "password.reset_by_admin" and e["detail"] == "forgetful" for e in events)
+
+
+def test_a_second_admin_can_be_added(client):
+    add_user(client, "admin2", "admin")
+    assert client.get("/api/v1/users", headers=sign_in(client, "admin2")).status_code == 200
+
+
+def test_recovery_kit_codes_reset_an_admin_password_once(client):
+    main.RECOVERY_LIMIT.hits.clear()
+    main.RECOVERY_LIMIT_ALL.hits.clear()
+    add_user(client, "kitadmin", "admin")
+    auth = sign_in(client, "kitadmin")
+    assert client.get("/api/v1/me/recovery-codes", headers=auth).json()["remaining"] == 0
+    assert client.post("/api/v1/me/recovery-codes", json={"password": "wrong"}, headers=auth).status_code == 401
+    codes = client.post("/api/v1/me/recovery-codes", json={"password": "kitadmin-password-1"}, headers=auth).json()["codes"]
+    assert len(codes) == 8 and all(len(c) == 11 and c[5] == "-" for c in codes) and len(set(codes)) == 8
+    assert client.get("/api/v1/me/recovery-codes", headers=auth).json()["remaining"] == 8
+
+    reset = lambda code, pw="recovered-password-1", **kw: client.post(  # noqa: E731
+        "/api/v1/recovery/reset", json={"username": "kitadmin", "code": code, "new_password": pw}, **kw)
+    assert reset(codes[0], headers={"x-vipcon-public": "1"}).status_code == 403  # office network only
+    assert reset("AAAAA-AAAAA").status_code == 401
+    assert reset(codes[0], pw="short").status_code == 422  # a valid code is not spent on a bad password
+    r = reset(codes[0].lower().replace("-", " "))  # case and separators do not matter
+    assert r.status_code == 200 and r.json()["remaining"] == 7
+    assert client.get("/api/v1/me", headers=auth).status_code == 401  # old sessions end
+    sign_in(client, "kitadmin", "recovered-password-1")
+    assert reset(codes[0], pw="another-password-1").status_code == 401  # each code works once
+
+    # Codes are for admins: a host's username gets nowhere.
+    add_user(client, "kithost", "host")
+    r = client.post("/api/v1/recovery/reset", json={"username": "kithost", "code": codes[1], "new_password": "x" * 12})
+    assert r.status_code == 401
+
+    # A new kit replaces the old one.
+    auth = sign_in(client, "kitadmin", "recovered-password-1")
+    fresh = client.post("/api/v1/me/recovery-codes", json={"password": "recovered-password-1"}, headers=auth).json()["codes"]
+    assert reset(codes[1]).status_code == 401
+    main.RECOVERY_LIMIT.hits.clear()
+    assert reset(fresh[0], pw="third-password-1").status_code == 200
+
+
+def test_recovery_codes_are_rate_limited(client):
+    main.RECOVERY_LIMIT.hits.clear()
+    main.RECOVERY_LIMIT_ALL.hits.clear()
+    add_user(client, "slowadmin", "admin")
+    codes = client.post("/api/v1/me/recovery-codes", json={"password": "slowadmin-password-1"},
+                        headers=sign_in(client, "slowadmin")).json()["codes"]
+    reset = lambda code: client.post("/api/v1/recovery/reset", json={  # noqa: E731
+        "username": "slowadmin", "code": code, "new_password": "slow-password-1"})
+    for _ in range(5):
+        assert reset("BBBBB-BBBBB").status_code == 401
+    assert reset(codes[0]).status_code == 429  # even the right code waits out the window
+    main.RECOVERY_LIMIT.hits.clear()
+    assert reset(codes[0]).status_code == 200
+
+
+def test_device_screen_code_resets_an_admin_password(client, tmp_path, monkeypatch):
+    import hashlib
+    import json as _json
+    import time as _time
+
+    offer = tmp_path / "admin_reset.json"
+    monkeypatch.setattr(main, "SCREEN_RESET_FILE", str(offer))
+    add_user(client, "screenadmin", "admin")
+    old = sign_in(client, "screenadmin")
+
+    def show(code, nonce, expires_in=600):
+        offer.write_text(_json.dumps({"nonce": nonce, "salt": "s4lt", "expires_at": _time.time() + expires_in,
+                                      "hash": hashlib.sha256(("s4lt" + code).encode()).hexdigest()}))
+
+    def use(code, user="screenadmin", **kw):
+        return client.post("/api/v1/recovery/screen", json={"username": user, "code": code,
+                                                            "new_password": "screen-password-1"}, **kw)
+
+    assert use("12345678").status_code == 410  # nothing on screen
+    show("12345678", "n1", expires_in=-1)
+    assert use("12345678").status_code == 410  # expired
+    show("12345678", "n1")
+    assert use("12345678", headers={"x-vipcon-public": "1"}).status_code == 403
+    assert use("12345678", user="pwchange").status_code == 401  # admins only
+    assert use("1234 5678").status_code == 200
+    assert client.get("/api/v1/me", headers=old).status_code == 401
+    sign_in(client, "screenadmin", "screen-password-1")
+    assert client.get("/healthz").json()["screen_reset_used"] == "n1"  # the kiosk clears its screen
+    assert use("12345678").status_code == 410  # spent
+
+    # Five wrong guesses burn the code.
+    show("87654321", "n2")
+    for _ in range(main.SCREEN_RESET_MAX_FAILURES):
+        assert use("00000000").status_code == 401
+    assert use("87654321").status_code == 410
+
+    # The admin can switch the whole thing off.
+    auth = sign_in(client, "screenadmin", "screen-password-1")
+    assert client.post("/api/v1/settings", json={"screen_reset": False}, headers=auth).status_code == 200
+    assert client.get("/healthz").json()["screen_reset"] is False
+    show("11112222", "n3")
+    assert use("11112222").status_code == 403
+    client.post("/api/v1/settings", json={"screen_reset": True}, headers=auth)
+    actions = [e["action"] for e in client.get("/api/v1/security/events", headers=auth).json()]
+    assert "password.reset.device_screen" in actions and "screen_reset.disabled" in actions
+
+
+
+# ---------------------------------------------------------------- encrypted backup (keep these last: restore swaps the DB)
+
+
+class FakeRemote:
+    """The control plane's backup store, in memory."""
+    store = {}
+
+    def upload(self, locator, blob):
+        self.store.setdefault(locator, []).insert(0, blob)
+        return {"ok": True}
+
+    def versions(self, locator):
+        return [{"name": str(i)} for i in range(len(self.store.get(locator, [])))]
+
+    def fetch(self, locator, name):
+        return self.store[locator][int(name)]
+
+    def delete(self, locator):
+        self.store.pop(locator, None)
+        return {"ok": True}
+
+
+def test_backup_key_round_trip():
+    import backup
+    locator, key = backup.new_key()
+    text = backup.encode_key(locator, key)
+    assert text.startswith("VBK1-")
+    assert backup.decode_key(text.lower().replace("-", " ")) == (locator, key)
+    sealed = backup.seal(locator, key, b"secret data")
+    assert b"secret" not in sealed and backup.unseal(locator, key, sealed) == b"secret data"
+    with pytest.raises(backup.BackupError):
+        backup.unseal("0" * 32, key, sealed)  # the locator is bound in: no copying between kits
+    with pytest.raises(backup.BackupError):
+        backup.decode_key("VBK1-NOTAKEY")
+
+
+def test_encrypted_backup_and_restore(client, monkeypatch):
+    monkeypatch.setattr(main, "backup_remote", lambda: FakeRemote())
+    monkeypatch.setattr(main, "CONTROL_PLANE_URL", "http://cp.test")
+    FakeRemote.store.clear()
+    admin = {"Authorization": f"Bearer {token(client)}"}
+    assert client.get("/api/v1/backup", headers=admin).json()["enabled"] is False
+    assert client.post("/api/v1/backup/enable", json={"password": "wrong"}, headers=admin).status_code == 401
+    r = client.post("/api/v1/backup/enable", json={"password": "host-password-1"}, headers=admin)
+    assert r.status_code == 200, r.text
+    kit = r.json()["backup_key"]
+    assert r.json()["status"]["last_ok_at"] and not r.json()["status"]["last_error"]
+    assert client.post("/api/v1/backup/enable", json={"password": "host-password-1"}, headers=admin).status_code == 409
+    (locator, blobs), = FakeRemote.store.items()
+    assert b"host-password" not in blobs[0] and b"SQLite" not in blobs[0]  # sealed, not just compressed
+    assert locator not in kit  # the kit is base32, not the raw locator
+    import backup
+    assert "key" not in client.get("/api/v1/backup", headers=admin).json()
+
+    # Data written after the backup is gone after a restore; every session ends.
+    add_user(client, "afterbackup", "member")
+    assert client.post("/api/v1/backup/run", headers=admin).json()["last_ok_at"]
+    FakeRemote.store[locator].insert(0, backup.seal(locator, b"\0" * 32, b"junk"))  # a newer copy with another key
+    FakeRemote.store[locator].pop(1)  # drop the copy that has afterbackup; the original one remains
+    bad = client.post("/api/v1/backup/restore", json={"backup_key": "VBK1-AAAA", "password": "host-password-1"}, headers=admin)
+    assert bad.status_code == 422
+    other = backup.encode_key(locator, b"\1" * 32)
+    assert client.post("/api/v1/backup/restore", json={"backup_key": other, "password": "host-password-1"},
+                       headers=admin).status_code == 409
+    r = client.post("/api/v1/backup/restore", json={"backup_key": kit, "password": "host-password-1"}, headers=admin)
+    assert r.status_code == 200, r.text
+    assert client.get("/api/v1/me", headers=admin).status_code == 401  # session epoch changed
+    admin = {"Authorization": f"Bearer {token(client)}"}
+    names = {u["username"] for u in client.get("/api/v1/users", headers=admin).json()}
+    assert "afterbackup" not in names and "host" in names
+    assert any(e["action"] == "backup.restored" for e in client.get("/api/v1/security/events", headers=admin).json())
+    assert client.get("/api/v1/backup", headers=admin).json()["enabled"] is True  # carries on to the same place
+
+    # Turning it off deletes the off-site copies and forgets the key.
+    assert client.post("/api/v1/backup/disable", json={"password": "host-password-1"}, headers=admin).json()["remote_deleted"]
+    assert FakeRemote.store == {} and client.get("/api/v1/backup", headers=admin).json()["enabled"] is False

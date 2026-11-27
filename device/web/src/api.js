@@ -128,3 +128,55 @@ export async function me(token) {
 export async function getSettings(token) {
   return api('GET', '/settings', undefined, token)
 }
+
+export async function saveSettings(token, data) {
+  return api('POST', '/settings', data, token)
+}
+
+export async function changePassword(token, currentPassword, newPassword) {
+  return api('POST', '/me/password', { current_password: currentPassword, new_password: newPassword }, token)
+}
+
+export async function resetUserPassword(token, id, newPassword) {
+  return api('POST', `/users/${id}/password`, { new_password: newPassword }, token)
+}
+
+export async function recoveryStatus(token) {
+  return api('GET', '/me/recovery-codes', undefined, token)
+}
+
+export async function newRecoveryCodes(token, password) {
+  return api('POST', '/me/recovery-codes', { password }, token)
+}
+
+export async function recoveryReset(username, code, newPassword) {
+  return api('POST', '/recovery/reset', { username, code, new_password: newPassword })
+}
+
+export async function screenReset(username, code, newPassword) {
+  return api('POST', '/recovery/screen', { username, code, new_password: newPassword })
+}
+
+export async function securityEvents(token) {
+  return api('GET', '/security/events', undefined, token)
+}
+
+export async function backupStatus(token) {
+  return api('GET', '/backup', undefined, token)
+}
+
+export async function backupEnable(token, password) {
+  return api('POST', '/backup/enable', { password }, token)
+}
+
+export async function backupRun(token) {
+  return api('POST', '/backup/run', undefined, token)
+}
+
+export async function backupDisable(token, password) {
+  return api('POST', '/backup/disable', { password }, token)
+}
+
+export async function backupRestore(token, backupKey, password) {
+  return api('POST', '/backup/restore', { backup_key: backupKey, password }, token)
+}

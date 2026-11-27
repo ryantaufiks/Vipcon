@@ -23,6 +23,19 @@ class User(Base):
     locked_until = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=now)
     last_login = Column(DateTime, nullable=True)
+    # Bumped whenever the password changes: sessions carry it, so older ones stop working.
+    token_version = Column(Integer, default=0)
+
+
+class RecoveryCode(Base):
+    """One-time codes that let an admin set a new password without signing in (the Recovery
+    Kit). Stored hashed, like passwords; a used code is kept, marked, so it can never work again."""
+    __tablename__ = "recovery_codes"
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"), index=True)
+    code_hash = Column(String, nullable=False)
+    created_at = Column(DateTime, default=now)
+    used_at = Column(DateTime, nullable=True)
 
 
 class Meeting(Base):
@@ -69,6 +82,11 @@ class OrgSettings(Base):
     org_name = Column(String)
     logo_path = Column(String)
     theme = Column(JSON)
+    # Last-resort admin reset from the device's own touch screen (proof of physical access).
+    screen_reset = Column(Boolean, default=True)
+    screen_reset_used = Column(String, nullable=True)  # nonce of the last screen code spent
+    # Part of every session token; a restore from backup sets a new one, ending every session.
+    session_epoch = Column(String, nullable=True)
 
 
 class LicenseState(Base):
@@ -85,3 +103,4 @@ class LocalAudit(Base):
     user_id = Column(Integer, nullable=True)
     action = Column(String)
     ts = Column(DateTime, default=now)
+    detail = Column(String, nullable=True)

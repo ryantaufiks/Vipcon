@@ -115,7 +115,9 @@ screen's links use the Pi's IP address, which works but shows a certificate warn
      phone; the setup page opens; choose the office Wi-Fi and enter its password.
    - A saved network or a plugged-in cable ends setup on its own.
 2. **Claim**: on a phone on the **same network**, touch the screen and scan the activation QR.
-   Create the Client Admin account. The claim code works once.
+   Create the Client Admin account. The claim code works once. The next screen shows the
+   **Recovery Kit**: 8 one-time codes that reset the admin password if it is forgotten. The client
+   must save them (download or copy); they are never shown again.
 3. **Meet**: sign in at `https://<name>.lan.<root domain>/admin`, create meetings and share the
    links. People in the room touch the screen and scan the QR to see the meetings in progress
    and join from their browser. With internet access, the shared links and the QR use the public
@@ -137,6 +139,37 @@ minute or two of reaching the internet.
 | "Device not ready" on the screen | Not provisioned | Re-run the installer with `device.json` |
 | Can't start meetings | No active contract (licence `no_contract` or `expired`) | Create or renew the contract in the console |
 | Claim code lost or already used | — | Console → the device → **Regenerate QR**, then put the new code on the device (see below) |
+| A host or member forgot their password | — | A Client Admin: **People** → the user → **Reset password** |
+| The Client Admin forgot their password | — | Sign-in page → **Forgot password**: a Recovery Kit code, or (at the device) press and hold the screen 8 s and enter the code it shows. A second Client Admin can also reset it. Factory reset only as a last resort |
+
+## Account recovery
+
+Nobody outside the building can reset a password: there is no vendor reset, by design.
+
+1. **Change password**: any user, signed in (console → account menu → Change password).
+2. **Admin resets a user**: People → the user → Reset password (any role, including another admin).
+3. **Recovery Kit**: 8 one-time codes for each Client Admin, shown at activation and renewable from
+   the console's **Security** page (needs the password). Sign-in page → Forgot password → Recovery code.
+4. **Device screen**: at the device, press and hold the screen for 8 seconds. It shows an 8-digit
+   code (valid 10 minutes; a tap cancels it; five wrong tries burn it) and a QR to the reset page.
+   Office network only. A Client Admin can switch this off on the Security page.
+
+Every reset ends the account's other sessions and is listed under **Recent security events**.
+
+## Encrypted off-site backup (opt-in)
+
+Console → **Security** → **Turn on backup** (needs the admin password). The device makes a
+**Backup Key** (`VBK1-…`), shows it once, and backs up straight away and then daily: accounts,
+meetings, settings and the audit log (meeting media is never recorded, so never backed up).
+Each backup is a SQLite snapshot sealed on the device with AES-256-GCM; the control plane keeps
+the 7 newest sealed copies under `DEVICE_BACKUP_DIR` (default `/data/device-backups`) and cannot
+read them. Only the client holds the key: lose it and the backups cannot be restored.
+
+- **Restore** (same device after a wipe, or a replacement device after its claim): Security →
+  **Restore from backup** → Backup Key + the signed-in admin's password. Everything on the device
+  is replaced and everyone is signed out; sign in with an account from the backup.
+- **Turn off**: deletes the copies kept off-site and the device forgets the key.
+- Devices without the VIPCON service (sovereign/offline) cannot back up off-site.
 
 ## Resetting a device
 

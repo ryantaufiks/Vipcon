@@ -3,6 +3,7 @@ import { claimDevice, claimStatus, saveAuth } from './api.js'
 import { PublicLayout, Button, TextInput, PasswordInput, Notice, Spinner } from './ui.jsx'
 import { CheckCircle, Alert, Shield } from './icons.jsx'
 import { friendly } from './format.js'
+import { RecoveryKit } from './Recovery.jsx'
 
 // Read the one-time code once, then drop it from the address bar so it does not
 // linger in browser history or get shared by copying the URL.
@@ -41,6 +42,7 @@ export default function Claim() {
   const [error, setError] = useState('')
   const [errors, setErrors] = useState({})
   const [done, setDone] = useState(false)
+  const [codes, setCodes] = useState(null) // the Recovery Kit, shown once right after activation
 
   useEffect(() => {
     claimStatus().then(setStatus).catch(() => setStatus({ claimed: false, unreachable: true }))
@@ -64,6 +66,7 @@ export default function Claim() {
       saveAuth(data.token, data.username)
       setPassword('')
       setConfirmPw('')
+      if (data.recovery_codes?.length) setCodes(data.recovery_codes)
       setDone(true)
     } catch (err) {
       setError(friendly(err))
@@ -72,6 +75,24 @@ export default function Claim() {
     }
   }
 
+  if (done && codes) {
+    return (
+      <PublicLayout>
+        <div className="public-card" style={{ maxWidth: 480 }}>
+          <div className="card card-pad form">
+            <div>
+              <h1 className="page-title">Save your Recovery Kit</h1>
+              <p className="page-sub">
+                If you ever forget the password for <strong>{username.trim().toLowerCase()}</strong>, one of these codes lets you
+                set a new one. Nobody else, including VIPCON, can reset it for you.
+              </p>
+            </div>
+            <RecoveryKit codes={codes} username={username.trim().toLowerCase()} onDone={() => setCodes(null)} />
+          </div>
+        </div>
+      </PublicLayout>
+    )
+  }
   if (done) {
     return (
       <StateCard icon={<CheckCircle size={26} />} tone="brand" title="Your VIPCON device is ready"

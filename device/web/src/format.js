@@ -97,6 +97,15 @@ const MESSAGES = {
   'unknown user': 'Your session has expired. Please sign in again.',
   'Request failed': 'Something went wrong. Please try again.',
   'Failed to fetch': 'Cannot reach the VIPCON device. Check your network connection.',
+  'current password incorrect': 'That password is not correct.',
+  'invalid recovery code': 'That recovery code is not valid for this account, or it has already been used.',
+  'too many attempts': 'Too many attempts. Wait 15 minutes, then try again.',
+  'invalid screen code': 'That code does not match the one on the device screen.',
+  'no reset code on screen': 'There is no valid code on the device screen. Press and hold the screen for 8 seconds to show a new one.',
+  'screen reset disabled': 'Resetting from the device screen has been switched off by a Client Admin.',
+  'office network only': 'This only works on the office network.',
+  'backup already on': 'Backups are already on.',
+  'use change password for your own account': 'Use “Change password” for your own account.',
 }
 
 export function friendly(err) {
