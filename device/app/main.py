@@ -1,3 +1,4 @@
+import base64
 import hashlib
 import json
 import hmac
@@ -15,6 +16,7 @@ from pydantic import BaseModel
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import sessionmaker
 
+import backup
 from models import Base, LobbyRequest, LocalAudit, Meeting, OrgSettings, RecoveryCode, User
 from livekit_admin import delete_room, list_participants, list_rooms, mute_participant, remove_participant
 from security import (
@@ -51,6 +53,8 @@ def get_db():
 def startup():
     Base.metadata.create_all(engine)
     migrate()
+    if os.environ.get("BACKUP_SCHEDULER", "1") == "1":
+        threading.Thread(target=backup_scheduler, daemon=True).start()
 
 
 ADDED_COLUMNS = [  # (table, column, SQL type and default), in the order they were introduced
@@ -59,6 +63,7 @@ ADDED_COLUMNS = [  # (table, column, SQL type and default), in the order they we
     ("org_settings", "screen_reset", "BOOLEAN DEFAULT 1"),
     ("org_settings", "screen_reset_used", "VARCHAR"),
     ("local_audit", "detail", "VARCHAR"),
+    ("org_settings", "session_epoch", "VARCHAR"),
 ]
 
 
@@ -93,11 +98,18 @@ def current_user(authorization: str = Header(None), db=Depends(get_db)):
         raise HTTPException(401, "unknown user")
     if int(payload.get("v", 0)) != (user.token_version or 0):  # password changed since: sign in again
         raise HTTPException(401, "invalid token")
+    if payload.get("e", "") != session_epoch(db):  # the data was restored from a backup since
+        raise HTTPException(401, "invalid token")
     return user
 
 
-def session_token(user):
-    return create_session_token(user.id, user.token_version or 0)
+def session_epoch(db):
+    s = db.query(OrgSettings).first()
+    return (s.session_epoch if s else None) or ""
+
+
+def session_token(user, db):
+    return create_session_token(user.id, user.token_version or 0, session_epoch(db))
 
 
 SITE_FILE = os.environ.get("SITE_FILE", "/etc/appliance/site_fqdn")
@@ -342,7 +354,7 @@ def claim(req: ClaimRequest, db=Depends(get_db)):
         codes = new_recovery_codes(db, user)  # the Recovery Kit, shown once on the next screen
         audit(db, user, "device.claimed")
         db.commit()
-    return {"ok": True, "token": session_token(user), "username": username, "recovery_codes": codes}
+    return {"ok": True, "token": session_token(user, db), "username": username, "recovery_codes": codes}
 
 
 @app.post("/api/v1/login")
@@ -362,7 +374,7 @@ def login(req: LoginRequest, db=Depends(get_db)):
     user.failed_attempts = 0
     user.last_login = datetime.now(timezone.utc)
     db.commit()
-    return {"token": session_token(user), "user": {"id": user.id, "username": user.username, "role": user.role}}
+    return {"token": session_token(user, db), "user": {"id": user.id, "username": user.username, "role": user.role}}
 
 
 @app.get("/api/v1/me")
@@ -547,7 +559,7 @@ def change_password(req: PasswordChange, user=Depends(current_user), db=Depends(
     set_password(user, req.new_password)
     audit(db, user, "password.changed")
     db.commit()
-    return {"ok": True, "token": session_token(user)}  # this browser stays signed in
+    return {"ok": True, "token": session_token(user, db)}  # this browser stays signed in
 
 
 @app.post("/api/v1/users/{user_id}/password")
@@ -1033,3 +1045,124 @@ def set_settings(req: SettingsRequest, user=Depends(current_user), db=Depends(ge
         audit(db, user, "screen_reset.enabled" if req.screen_reset else "screen_reset.disabled")
     db.commit()
     return {"ok": True}
+
+
+# ---------------------------------------------------------------- encrypted off-site backup (opt-in)
+#
+# See backup.py. Turning it on needs the admin's password and shows the Backup Key once; the device
+# keeps the key (outside the database, so a backup never carries its own key) and backs up daily.
+# Restoring needs the Backup Key and the signed-in admin's password, replaces every account,
+# meeting and setting, and ends every session (a new session epoch).
+
+DB_PATH = DATABASE_URL.split("sqlite:///", 1)[1] if DATABASE_URL.startswith("sqlite:///") else ""
+_backup_lock = threading.Lock()
+
+
+class BackupRestore(BaseModel):
+    backup_key: str
+    password: str
+
+
+def backup_remote():
+    return backup.Remote(CONTROL_PLANE_URL, DEVICE_ID)
+
+
+def backup_scheduler():
+    """Daily backup while it is switched on (first check a few minutes after start)."""
+    time.sleep(300)
+    while True:
+        try:
+            if backup.due():
+                with _backup_lock:
+                    backup.run(DB_PATH, backup_remote())
+        except Exception as e:  # never let the thread die
+            print("backup scheduler:", e, flush=True)
+        time.sleep(1800)
+
+
+@app.get("/api/v1/backup")
+def backup_status(user=Depends(current_user)):
+    require_admin(user)
+    return {**backup.public_status(backup.load_state()), "available": bool(CONTROL_PLANE_URL and DEVICE_ID)}
+
+
+@app.post("/api/v1/backup/enable")
+def backup_enable(req: ConfirmPassword, user=Depends(current_user), db=Depends(get_db)):
+    require_admin(user)
+    if not verify_password(req.password, user.password_hash):
+        raise HTTPException(401, "current password incorrect")
+    with _backup_lock:
+        if backup.load_state().get("enabled"):
+            raise HTTPException(409, "backup already on")
+        locator, key = backup.new_key()
+        backup.save_state({"enabled": True, "locator": locator, "key": base64.b64encode(key).decode()})
+        audit(db, user, "backup.enabled")
+        db.commit()
+        status = backup.run(DB_PATH, backup_remote())
+    return {"backup_key": backup.encode_key(locator, key), "status": status}
+
+
+@app.post("/api/v1/backup/run")
+def backup_now(user=Depends(current_user)):
+    require_admin(user)
+    with _backup_lock:
+        try:
+            return backup.run(DB_PATH, backup_remote())
+        except backup.BackupError as e:
+            raise HTTPException(409, str(e))
+
+
+@app.post("/api/v1/backup/disable")
+def backup_disable(req: ConfirmPassword, user=Depends(current_user), db=Depends(get_db)):
+    """Switch off and delete the copies kept off-site (best effort if the service is unreachable)."""
+    require_admin(user)
+    if not verify_password(req.password, user.password_hash):
+        raise HTTPException(401, "current password incorrect")
+    with _backup_lock:
+        state = backup.load_state()
+        removed = True
+        if state.get("locator"):
+            try:
+                backup_remote().delete(state["locator"])
+            except backup.BackupError:
+                removed = False
+        backup.forget_state()
+        audit(db, user, "backup.disabled", None if removed else "off-site copies could not be deleted")
+        db.commit()
+    return {"ok": True, "remote_deleted": removed}
+
+
+@app.post("/api/v1/backup/restore")
+def backup_restore(req: BackupRestore, user=Depends(current_user), db=Depends(get_db)):
+    require_admin(user)
+    if not verify_password(req.password, user.password_hash):
+        raise HTTPException(401, "current password incorrect")
+    try:
+        locator, key = backup.decode_key(req.backup_key)
+    except backup.BackupError as e:
+        raise HTTPException(422, str(e))
+    if not DB_PATH:
+        raise HTTPException(503, "restore needs the device database")
+    who = user.username
+    with _backup_lock:
+        try:
+            path = backup.download(backup_remote(), locator, key)
+        except backup.BackupError as e:
+            raise HTTPException(409, str(e))
+        db.close()
+        engine.dispose()
+        os.replace(path, DB_PATH)
+        migrate()  # the backup may predate some columns
+        fresh = SessionLocal()
+        try:
+            settings = fresh.query(OrgSettings).first() or OrgSettings()
+            settings.session_epoch = secrets.token_hex(8)  # every session, old or restored, ends
+            fresh.add(settings)
+            fresh.add(LocalAudit(user_id=None, action="backup.restored", detail=f"by {who}"))
+            fresh.commit()
+            admins = fresh.query(User).filter_by(role="admin", active=True).count()
+        finally:
+            fresh.close()
+        # Carry on backing up the restored data to the same place, with the same key.
+        backup.save_state({"enabled": True, "locator": locator, "key": base64.b64encode(key).decode()})
+    return {"ok": True, "admins": admins}

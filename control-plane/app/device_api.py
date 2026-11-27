@@ -2,12 +2,16 @@
 
 import json
 import logging
+import os
+import re
+import time
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import PlainTextResponse, Response
 from pydantic import BaseModel
 
+import config
 from db import get_db
 from models import Device, Heartbeat, now
 from security import LICENSE_PUBLIC_PEM, decrypt_secret, sha256_hex, verify_device_signature
@@ -211,3 +215,81 @@ def claim_verify(req: ClaimVerify, request: Request, db=Depends(get_db)):
     audit(db, "device", "device.claimed", device.device_id, client_ip(request))
     db.commit()
     return {"ok": True, "device_id": device.device_id}
+
+
+# ---------------------------------------------------------------- device data backups
+#
+# The device seals its database before upload (AES-256-GCM, key held by the client only); this
+# server only ever sees "VBK1" + ciphertext. A backup lives under its locator: 32 random hex digits
+# that are part of the client's Backup Key, so whoever can fetch it also needs that key to read it.
+# Any registered (signed, not revoked) device may write or read a locator it knows: a replacement
+# device restores and then carries on backing up to the same place.
+
+LOCATOR_RE = re.compile(r"^[0-9a-f]{32}$")
+BACKUP_NAME_RE = re.compile(r"^[0-9]{13}\.vbk$")
+
+
+def _backup_dir(locator):
+    if not LOCATOR_RE.match(locator or ""):
+        raise HTTPException(404, "unknown backup")
+    return os.path.join(config.DEVICE_BACKUP_DIR, locator)
+
+
+def _versions(folder):
+    try:
+        return sorted((n for n in os.listdir(folder) if BACKUP_NAME_RE.match(n)), reverse=True)
+    except OSError:
+        return []
+
+
+@router.post("/backup/{locator}")
+async def store_backup(locator: str, request: Request, device=Depends(signed_device), db=Depends(get_db)):
+    folder = _backup_dir(locator)
+    body = request.state.body
+    if len(body) > config.DEVICE_BACKUP_MAX_BYTES:
+        raise HTTPException(413, "backup too large")
+    if not body.startswith(b"VBK1") or len(body) < 4 + 12 + 16:
+        raise HTTPException(400, "not a sealed backup")
+    os.makedirs(folder, mode=0o700, exist_ok=True)
+    name = f"{int(time.time() * 1000)}.vbk"
+    tmp = os.path.join(folder, name + ".tmp")
+    with open(tmp, "wb") as f:
+        f.write(body)
+    os.replace(tmp, os.path.join(folder, name))
+    for old in _versions(folder)[config.DEVICE_BACKUP_KEEP:]:
+        os.remove(os.path.join(folder, old))
+    with open(os.path.join(folder, "last_writer"), "w") as f:
+        f.write(device.device_id)
+    audit(db, f"device:{device.device_id}", "device.backup_stored", locator[:8], client_ip(request))
+    db.commit()
+    return {"ok": True, "name": name, "size": len(body)}
+
+
+@router.get("/backup/{locator}")
+def list_backups(locator: str, device=Depends(signed_device)):
+    folder = _backup_dir(locator)
+    return {"versions": [{"name": n, "size": os.path.getsize(os.path.join(folder, n))} for n in _versions(folder)]}
+
+
+@router.get("/backup/{locator}/{name}")
+def get_backup(locator: str, name: str, device=Depends(signed_device)):
+    folder = _backup_dir(locator)
+    if not BACKUP_NAME_RE.match(name) or not os.path.exists(os.path.join(folder, name)):
+        raise HTTPException(404, "unknown backup")
+    with open(os.path.join(folder, name), "rb") as f:
+        return Response(content=f.read(), media_type="application/octet-stream")
+
+
+@router.delete("/backup/{locator}")
+def delete_backups(locator: str, request: Request, device=Depends(signed_device), db=Depends(get_db)):
+    """The client switched backups off: remove every copy kept here."""
+    folder = _backup_dir(locator)
+    removed = 0
+    for n in os.listdir(folder) if os.path.isdir(folder) else []:
+        os.remove(os.path.join(folder, n))
+        removed += 1
+    if os.path.isdir(folder):
+        os.rmdir(folder)
+    audit(db, f"device:{device.device_id}", "device.backup_deleted", locator[:8], client_ip(request))
+    db.commit()
+    return {"ok": True, "removed": removed}

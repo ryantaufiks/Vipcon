@@ -207,7 +207,8 @@ function Console({ token, onToken, onSignOut }) {
         {page === 'people' && isAdmin
           ? <PeoplePage users={users} me={user} token={token} reload={loadUsers} fail={fail} />
           : page === 'security' && isAdmin
-            ? <SecurityPage token={token} user={user} fail={fail} recovery={recovery} reloadRecovery={reloadRecovery} />
+            ? <SecurityPage token={token} user={user} fail={fail} recovery={recovery} reloadRecovery={reloadRecovery}
+                            org={org} onSignOut={onSignOut} />
             : <MeetingsPage meetings={meetings} live={live} token={token} org={org} reload={loadMeetings} fail={fail} isAdmin={isAdmin}
                             canCreate={isAdmin || user.role === 'host'} />}
       </div>

@@ -160,3 +160,23 @@ export async function screenReset(username, code, newPassword) {
 export async function securityEvents(token) {
   return api('GET', '/security/events', undefined, token)
 }
+
+export async function backupStatus(token) {
+  return api('GET', '/backup', undefined, token)
+}
+
+export async function backupEnable(token, password) {
+  return api('POST', '/backup/enable', { password }, token)
+}
+
+export async function backupRun(token) {
+  return api('POST', '/backup/run', undefined, token)
+}
+
+export async function backupDisable(token, password) {
+  return api('POST', '/backup/disable', { password }, token)
+}
+
+export async function backupRestore(token, backupKey, password) {
+  return api('POST', '/backup/restore', { backup_key: backupKey, password }, token)
+}

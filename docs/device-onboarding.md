@@ -156,6 +156,21 @@ Nobody outside the building can reset a password: there is no vendor reset, by d
 
 Every reset ends the account's other sessions and is listed under **Recent security events**.
 
+## Encrypted off-site backup (opt-in)
+
+Console → **Security** → **Turn on backup** (needs the admin password). The device makes a
+**Backup Key** (`VBK1-…`), shows it once, and backs up straight away and then daily: accounts,
+meetings, settings and the audit log (meeting media is never recorded, so never backed up).
+Each backup is a SQLite snapshot sealed on the device with AES-256-GCM; the control plane keeps
+the 7 newest sealed copies under `DEVICE_BACKUP_DIR` (default `/data/device-backups`) and cannot
+read them. Only the client holds the key: lose it and the backups cannot be restored.
+
+- **Restore** (same device after a wipe, or a replacement device after its claim): Security →
+  **Restore from backup** → Backup Key + the signed-in admin's password. Everything on the device
+  is replaced and everyone is signed out; sign in with an account from the backup.
+- **Turn off**: deletes the copies kept off-site and the device forgets the key.
+- Devices without the VIPCON service (sovereign/offline) cannot back up off-site.
+
 ## Resetting a device
 
 - **New claim code** (console → the device → Regenerate QR): the device becomes unclaimed. Put

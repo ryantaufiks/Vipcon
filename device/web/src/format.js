@@ -104,6 +104,7 @@ const MESSAGES = {
   'no reset code on screen': 'There is no valid code on the device screen. Press and hold the screen for 8 seconds to show a new one.',
   'screen reset disabled': 'Resetting from the device screen has been switched off by a Client Admin.',
   'office network only': 'This only works on the office network.',
+  'backup already on': 'Backups are already on.',
   'use change password for your own account': 'Use “Change password” for your own account.',
 }
 

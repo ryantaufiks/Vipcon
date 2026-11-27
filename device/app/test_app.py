@@ -10,7 +10,8 @@ import tempfile
 
 TMP = tempfile.mkdtemp()
 os.environ.update(DATABASE_URL=f"sqlite:///{TMP}/app.db", SESSION_SECRET="test-session-secret",
-                  DEVICE_ID="dev_test", ROOT_DOMAIN="example.test")
+                  DEVICE_ID="dev_test", ROOT_DOMAIN="example.test", BACKUP_SCHEDULER="0",
+                  BACKUP_STATE_FILE=f"{TMP}/backup.json")
 sys.path.insert(0, os.path.dirname(__file__))
 
 # A database from before show_on_screen existed, to exercise the startup migration.
@@ -365,3 +366,82 @@ def test_device_screen_code_resets_an_admin_password(client, tmp_path, monkeypat
     client.post("/api/v1/settings", json={"screen_reset": True}, headers=auth)
     actions = [e["action"] for e in client.get("/api/v1/security/events", headers=auth).json()]
     assert "password.reset.device_screen" in actions and "screen_reset.disabled" in actions
+
+
+
+# ---------------------------------------------------------------- encrypted backup (keep these last: restore swaps the DB)
+
+
+class FakeRemote:
+    """The control plane's backup store, in memory."""
+    store = {}
+
+    def upload(self, locator, blob):
+        self.store.setdefault(locator, []).insert(0, blob)
+        return {"ok": True}
+
+    def versions(self, locator):
+        return [{"name": str(i)} for i in range(len(self.store.get(locator, [])))]
+
+    def fetch(self, locator, name):
+        return self.store[locator][int(name)]
+
+    def delete(self, locator):
+        self.store.pop(locator, None)
+        return {"ok": True}
+
+
+def test_backup_key_round_trip():
+    import backup
+    locator, key = backup.new_key()
+    text = backup.encode_key(locator, key)
+    assert text.startswith("VBK1-")
+    assert backup.decode_key(text.lower().replace("-", " ")) == (locator, key)
+    sealed = backup.seal(locator, key, b"secret data")
+    assert b"secret" not in sealed and backup.unseal(locator, key, sealed) == b"secret data"
+    with pytest.raises(backup.BackupError):
+        backup.unseal("0" * 32, key, sealed)  # the locator is bound in: no copying between kits
+    with pytest.raises(backup.BackupError):
+        backup.decode_key("VBK1-NOTAKEY")
+
+
+def test_encrypted_backup_and_restore(client, monkeypatch):
+    monkeypatch.setattr(main, "backup_remote", lambda: FakeRemote())
+    monkeypatch.setattr(main, "CONTROL_PLANE_URL", "http://cp.test")
+    FakeRemote.store.clear()
+    admin = {"Authorization": f"Bearer {token(client)}"}
+    assert client.get("/api/v1/backup", headers=admin).json()["enabled"] is False
+    assert client.post("/api/v1/backup/enable", json={"password": "wrong"}, headers=admin).status_code == 401
+    r = client.post("/api/v1/backup/enable", json={"password": "host-password-1"}, headers=admin)
+    assert r.status_code == 200, r.text
+    kit = r.json()["backup_key"]
+    assert r.json()["status"]["last_ok_at"] and not r.json()["status"]["last_error"]
+    assert client.post("/api/v1/backup/enable", json={"password": "host-password-1"}, headers=admin).status_code == 409
+    (locator, blobs), = FakeRemote.store.items()
+    assert b"host-password" not in blobs[0] and b"SQLite" not in blobs[0]  # sealed, not just compressed
+    assert locator not in kit  # the kit is base32, not the raw locator
+    import backup
+    assert "key" not in client.get("/api/v1/backup", headers=admin).json()
+
+    # Data written after the backup is gone after a restore; every session ends.
+    add_user(client, "afterbackup", "member")
+    assert client.post("/api/v1/backup/run", headers=admin).json()["last_ok_at"]
+    FakeRemote.store[locator].insert(0, backup.seal(locator, b"\0" * 32, b"junk"))  # a newer copy with another key
+    FakeRemote.store[locator].pop(1)  # drop the copy that has afterbackup; the original one remains
+    bad = client.post("/api/v1/backup/restore", json={"backup_key": "VBK1-AAAA", "password": "host-password-1"}, headers=admin)
+    assert bad.status_code == 422
+    other = backup.encode_key(locator, b"\1" * 32)
+    assert client.post("/api/v1/backup/restore", json={"backup_key": other, "password": "host-password-1"},
+                       headers=admin).status_code == 409
+    r = client.post("/api/v1/backup/restore", json={"backup_key": kit, "password": "host-password-1"}, headers=admin)
+    assert r.status_code == 200, r.text
+    assert client.get("/api/v1/me", headers=admin).status_code == 401  # session epoch changed
+    admin = {"Authorization": f"Bearer {token(client)}"}
+    names = {u["username"] for u in client.get("/api/v1/users", headers=admin).json()}
+    assert "afterbackup" not in names and "host" in names
+    assert any(e["action"] == "backup.restored" for e in client.get("/api/v1/security/events", headers=admin).json())
+    assert client.get("/api/v1/backup", headers=admin).json()["enabled"] is True  # carries on to the same place
+
+    # Turning it off deletes the off-site copies and forgets the key.
+    assert client.post("/api/v1/backup/disable", json={"password": "host-password-1"}, headers=admin).json()["remote_deleted"]
+    assert FakeRemote.store == {} and client.get("/api/v1/backup", headers=admin).json()["enabled"] is False

@@ -85,6 +85,8 @@ class OrgSettings(Base):
     # Last-resort admin reset from the device's own touch screen (proof of physical access).
     screen_reset = Column(Boolean, default=True)
     screen_reset_used = Column(String, nullable=True)  # nonce of the last screen code spent
+    # Part of every session token; a restore from backup sets a new one, ending every session.
+    session_epoch = Column(String, nullable=True)
 
 
 class LicenseState(Base):

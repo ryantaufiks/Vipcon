@@ -27,10 +27,11 @@ def verify_password(password, stored):
         return False
 
 
-def create_session_token(user_id, version=0):
-    """version is the user's token_version: changing the password bumps it, ending older sessions."""
+def create_session_token(user_id, version=0, epoch=""):
+    """version is the user's token_version (a password change bumps it); epoch is the device's
+    session epoch (a restore from backup changes it). Either change ends older sessions."""
     now = int(time.time())
-    return jwt.encode({"sub": str(user_id), "v": int(version or 0), "nbf": now, "exp": now + 86400},
+    return jwt.encode({"sub": str(user_id), "v": int(version or 0), "e": epoch or "", "nbf": now, "exp": now + 86400},
                       SESSION_SECRET, algorithm="HS256")
 
 

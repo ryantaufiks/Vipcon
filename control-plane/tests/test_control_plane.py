@@ -799,3 +799,42 @@ def test_turn_over_tls_is_offered_once_its_certificate_exists(monkeypatch):
         assert "turn.example.test" not in services.sync_cert_wanted(db)
     finally:
         db.close()
+
+
+def register_device(client, admin, label):
+    r = client.post("/devices", data={"csrf": admin, "label": label, "client_id": "1", "plan_id": "1"})
+    assert r.status_code == 200, r.text
+    payload = json.loads(unescape(re.search(r"<pre>(.*?)</pre>", r.text, re.S).group(1)))
+    return load_agent(payload["device_id"], payload["device_secret"])
+
+
+def test_device_backups_are_stored_as_opaque_sealed_files(client, admin, monkeypatch):
+    import config
+
+    monkeypatch.setattr(config, "DEVICE_BACKUP_DIR", f"{TMP}/device-backups")
+    monkeypatch.setattr(config, "DEVICE_BACKUP_KEEP", 3)
+    one, two = register_device(client, admin, "Backup A"), register_device(client, admin, "Backup B")
+    locator = "ab" * 16
+    path = f"/api/v1/backup/{locator}"
+
+    def put(agent, body, p=path):
+        return client.post(p, content=body, headers=agent.sign("POST", p, body))
+
+    assert client.post(path, content=b"VBK1" + b"x" * 40).status_code == 401  # signed devices only
+    assert put(one, b"plain sqlite, not sealed" * 3).status_code == 400
+    assert put(one, b"VBK1" + b"x" * 40, "/api/v1/backup/not-a-locator").status_code == 404
+    for i in range(5):
+        assert put(one, b"VBK1" + bytes([i]) * 40).status_code == 200
+        time.sleep(0.002)
+    versions = signed_get(client, one, path).json()["versions"]
+    assert len(versions) == 3  # only the newest DEVICE_BACKUP_KEEP are kept
+    newest = versions[0]["name"]
+    # A replacement device that knows the locator can read it (it still needs the client's key).
+    r = signed_get(client, two, f"{path}/{newest}")
+    assert r.status_code == 200 and r.content == b"VBK1" + bytes([4]) * 40
+    assert signed_get(client, two, f"{path}/../../etc").status_code == 404
+    assert signed_get(client, two, f"/api/v1/backup/{'cd' * 16}").json()["versions"] == []
+    # Switching backups off removes every copy.
+    r = client.delete(path, headers=one.sign("DELETE", path, b""))
+    assert r.status_code == 200 and r.json()["removed"] >= 3
+    assert signed_get(client, one, path).json()["versions"] == []

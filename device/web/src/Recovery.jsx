@@ -9,6 +9,7 @@ import {
 import { Button, TextInput, PasswordInput, Notice, Modal, Switch, Spinner, useToast, copyText } from './ui.jsx'
 import { Copy, Download, Shield, Monitor, Refresh, Clock } from './icons.jsx'
 import { friendly } from './format.js'
+import { BackupCard } from './Backup.jsx'
 
 const MIN_PASSWORD = 10
 
@@ -284,6 +285,9 @@ const EVENT_LABELS = {
   'screen_reset.disabled': 'Turned off reset from the device screen',
   'user.created': 'Added a user',
   'user.removed': 'Removed a user',
+  'backup.enabled': 'Turned on off-site backup',
+  'backup.disabled': 'Turned off off-site backup',
+  'backup.restored': 'Restored from a backup',
 }
 
 export function useRecoveryStatus(token, isAdmin) {
@@ -296,7 +300,7 @@ export function useRecoveryStatus(token, isAdmin) {
   return [status, reload]
 }
 
-export function SecurityPage({ token, user, fail, recovery, reloadRecovery }) {
+export function SecurityPage({ token, user, fail, recovery, reloadRecovery, org, onSignOut }) {
   const toast = useToast()
   const [screenOn, setScreenOn] = useState(null)
   const [events, setEvents] = useState(null)
@@ -375,6 +379,9 @@ export function SecurityPage({ token, user, fail, recovery, reloadRecovery }) {
         </Button></div>
         <p className="field-hint" style={{ margin: 0 }}>A new kit replaces the old one: the old codes stop working. Tip: add a second Client Admin on the People page, so either of you can reset the other’s password.</p>
       </div>
+
+      <BackupCard token={token} fail={fail} org={org} onChanged={loadEvents}
+                  onRestored={() => { toast({ message: 'Restored. Sign in with an account from the backup.' }); onSignOut() }} />
 
       <div className="card card-pad form" style={{ marginTop: 16 }}>
         <div className="sec-head">
