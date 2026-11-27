@@ -1,9 +1,11 @@
 {% extends "site/_layout.html" %}
-{% set cta = 'mailto:' ~ contact_email ~ '?subject=VIPCON%20demo%20request' if contact_email else '#contact' %}
+{% set demo_email = contact_email or 'rian@terapin.id' %}
+{% set demo_wa = '6586470807' %}
+{% set cta = '#demo' %}
 {% block body %}
 <header>
   <a href="#top" aria-label="VIPCON home"><img src="/static/site/vipcon_logo.png" alt="VIPCON"></a>
-  <nav aria-label="Main"><a href="#use-cases">Who it's for</a><a href="#features">Why VIPCON</a><a href="#privacy">Privacy</a><a href="#how">How it works</a><a class="btn gold" href="{{ cta }}">Request a demo</a></nav>
+  <nav aria-label="Main"><a href="#use-cases">Who it's for</a><a href="#features">Why VIPCON</a><a href="#privacy">Privacy</a><a href="#how">How it works</a><a class="btn gold" href="{{ cta }}" data-demo>Request a demo</a></nav>
 </header>
 
 <main>
@@ -24,7 +26,7 @@
     <p class="tag">PRIVATE VIDEO CONFERENCING</p>
     <h1>Confidential meetings that <span>never leave the room</span></h1>
     <p class="lead">A palm-sized meeting server that runs video calls on your own network. No cloud, no third parties, no recordings, and it keeps working when the internet doesn't.</p>
-    <div class="cta"><a class="btn gold" href="{{ cta }}">Request a demo</a><button class="btn" id="explore" type="button">Explore the device</button></div>
+    <div class="cta"><a class="btn gold" href="{{ cta }}" data-demo>Request a demo</a><button class="btn" id="explore" type="button">Explore the device</button></div>
     <ul class="badges" aria-label="At a glance"><li>PDPA &amp; GDPR ready</li><li>Works offline</li><li>No cloud</li></ul>
     <p class="hint">Drag to rotate · tap a point or the device to zoom in</p>
   </div>
@@ -171,17 +173,24 @@
   <div class="wrap">
     <h2>See VIPCON in your boardroom</h2>
     <p class="sub">We'll bring a unit and run a live meeting on your own network.</p>
-    {% if contact_email %}
-    <div class="cta"><a class="btn gold" href="{{ cta }}">Request a demo</a><a class="btn" href="#top">Back to top</a></div>
-    <p class="small">or email <a href="mailto:{{ contact_email }}">{{ contact_email }}</a></p>
-    {% else %}
-    <p class="small">Contact your VIPCON partner to arrange a demo.</p>
-    <div class="cta"><a class="btn" href="#top">Back to top</a></div>
-    {% endif %}
+    <div class="cta"><a class="btn gold" href="{{ cta }}" data-demo>Request a demo</a><a class="btn" href="#top">Back to top</a></div>
+    <p class="small">or email <a href="mailto:{{ demo_email }}?subject=VIPCON%20demo%20request">{{ demo_email }}</a></p>
   </div>
 </section>
 </main>
 
-<footer><img src="/static/site/vipcon_logo.png" alt="VIPCON"><span class="motto">PRIVATE. FLEXIBLE. SEAMLESS.</span><span>© VIPCON</span></footer>
+<footer><img src="/static/site/vipcon_logo.png" alt="VIPCON"><span class="motto">PRIVATE. FLEXIBLE. SEAMLESS.</span><span>© VIPCON · Built and supported by <a href="https://terapin.id" target="_blank" rel="noopener">terapin.id</a></span></footer>
+
+<dialog class="demo glass" id="demo" aria-labelledby="demoT">
+  <button class="demo-x" type="button" data-close aria-label="Close"><svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M4 4l10 10M14 4L4 14"/></svg></button>
+  <small>REQUEST A DEMO</small>
+  <h3 id="demoT">How would you like to reach us?</h3>
+  <p>We'll set up a live meeting on your own network.</p>
+  <div class="demo-opts">
+    <a class="demo-opt" href="https://wa.me/{{ demo_wa }}?text=Hi%2C%20I%27d%20like%20to%20request%20a%20VIPCON%20demo." target="_blank" rel="noopener"><svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 2a10 10 0 0 0-8.6 15.1L2 22l5-1.3A10 10 0 1 0 12 2zm0 18.2a8.2 8.2 0 0 1-4.2-1.2l-.3-.2-3 .8.8-2.9-.2-.3A8.2 8.2 0 1 1 12 20.2zm4.5-6.1c-.2-.1-1.5-.7-1.7-.8-.2-.1-.4-.1-.6.1l-.8 1c-.1.2-.3.2-.5.1a6.7 6.7 0 0 1-3.3-2.9c-.3-.4.2-.4.7-1.4.1-.2 0-.3 0-.4l-.8-1.8c-.2-.5-.4-.4-.6-.4h-.5c-.2 0-.4.1-.7.3-.2.3-.9.9-.9 2.2s.9 2.5 1.1 2.7c.1.2 1.8 2.8 4.4 3.9 1.6.7 2.3.8 3.1.6.5-.1 1.5-.6 1.7-1.2.2-.6.2-1.1.2-1.2-.1-.1-.3-.2-.5-.3z"/></svg><span><b>WhatsApp</b><em>+65 8647 0807</em></span></a>
+    <a class="demo-opt" href="mailto:{{ demo_email }}?subject=VIPCON%20demo%20request"><svg viewBox="0 0 24 24" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.8" d="M3.5 5.5h17v13h-17zM3.5 6l8.5 7 8.5-7"/></svg><span><b>Email</b><em>{{ demo_email }}</em></span></a>
+  </div>
+</dialog>
+<script src="/static/site/demo.js?v=1" defer></script>
 <script type="module" src="/static/site/landing.js?v=12"></script>
 {% endblock %}
