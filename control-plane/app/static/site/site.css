@@ -118,6 +118,16 @@ nav a{text-decoration:none;color:var(--mute)}nav a:hover{color:var(--ink)}
 .card p{margin:0;color:var(--mute);font-size:15px}
 @media(max-width:1000px){.grid4{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:560px){.grid4{grid-template-columns:minmax(0,1fr)}}
+/* security */
+.grid3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:18px;margin-top:44px}
+@media(max-width:1000px){.grid3{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:560px){.grid3{grid-template-columns:minmax(0,1fr)}}
+.soon{display:inline-block;vertical-align:middle;margin-left:8px;padding:3px 9px;border:1px solid rgba(242,179,61,.6);border-radius:999px;color:var(--gold2);font:600 11px var(--sans);letter-spacing:.06em;text-transform:uppercase}
+.soonlist{list-style:none;margin:0;padding:0}
+.soonlist li{position:relative;padding:7px 0 7px 22px;color:var(--mute);font-size:15px;border-top:1px solid var(--line)}
+.soonlist li:first-child{border-top:0;padding-top:0}
+.soonlist li::before{content:"";position:absolute;left:2px;top:15px;width:8px;height:8px;border-radius:50%;border:1.5px solid var(--gold)}
+.soonlist li:first-child::before{top:8px}
 
 .specs{background:linear-gradient(180deg,var(--bg),var(--bg2))}
 .split{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.1fr);gap:clamp(28px,5vw,72px);align-items:start;margin-top:40px}
