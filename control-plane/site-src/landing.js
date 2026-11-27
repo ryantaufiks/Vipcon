@@ -66,7 +66,13 @@ function onModel(g) {
     const n = o.name.toLowerCase();
     o.castShadow = o.receiveShadow = true;
     // ports, PCB and board parts keep the materials made for them in Blender (Web_*)
-    if (o.material && o.material.name.startsWith('Web_')) { o.castShadow = false; o.material.envMapIntensity = 1.4; return; }
+    if (o.material && o.material.name.startsWith('Web_')) {
+      o.castShadow = false; o.material.envMapIntensity = 1.4;
+      // board shows through the vents and port openings: dark charcoal solder mask instead of green,
+      // a touch lighter than the black chips (Web_Chip) so they still read against it
+      if (o.material.name === 'Web_PCB') { o.material.color.setRGB(0.045, 0.047, 0.052); o.material.roughness = 0.55; }
+      return;
+    }
     if (n.includes('screen')) { o.material = new THREE.MeshBasicMaterial({map: tex, toneMapped: false, polygonOffset: true, polygonOffsetFactor: -2}); o.castShadow = false; }
     else if (n.includes('glass')) o.material = M.glass;
     else if (n.includes('shell')) o.material = M.shell;
