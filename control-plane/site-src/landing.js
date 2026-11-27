@@ -50,23 +50,31 @@ const M = {
 // hotspots in model space (glTF millimetres): point the camera looks at, camera direction hint, distance,
 // and where the marker sits: on an edge next to the feature, so it never covers the screen, vents or ports
 const HOT = [
-  {k: 'YOUR BRAND', t: 'Your logo on the screen', p: 'The 3.5″ touch screen shows your company\'s logo and tagline, set from the management console. Tap it to start a meeting.', at: [42.5, 34, -28], mark: [0, 35, -58], dir: [0, 1.25, 0.55], d: 0.85},
-  {k: 'RUGGED', t: 'Rugged, solid build', p: 'An armoured three-part shell with raised corner bumpers, built to survive travel bags and busy boardroom tables.', at: [-7, 20, -64], dir: null, d: 0.62},
-  {k: 'COOLING', t: 'Silent passive cooling', p: 'Air enters below and leaves through angled side vents, keeping the device at a steady temperature. No fan, no noise.', at: [61, 22, -63], mark: [61, 6, -64.2], dir: null, d: 0.62},
-  {k: 'PLUG & PLAY', t: 'Plug in and meet', p: 'Connect Ethernet for your local network or the internet, add USB-C power, and it\'s ready. No software to install.', at: [92, 14, -45.7], mark: [92.8, 28, -45.7], dir: null, d: 0.62}
+  {k: 'YOUR BRAND', t: 'Your logo on the screen', p: 'The 3.5″ touch screen shows your company\'s logo and tagline, set from the management console. Tap it to start a meeting.', at: [42.5, 31.5, -28], mark: [0, 32.5, -57], dir: [0, 1.25, 0.55], d: 0.85},
+  {k: 'DESIGN', t: 'Modern, urban design', p: 'A clean faceted shell in light grey and graphite that fits any boardroom, studio or hotel room. Angled vents let warm air out, so it stays cool without a fan.', at: [4, 24, -54], mark: [-7.2, 18, -63.2], up: 0.8, dir: null, d: 1.15},
+  {k: 'COOLING', t: 'Silent passive cooling', p: 'Air enters below and leaves through angled side vents, keeping the device at a steady temperature. No fan, no noise.', at: [52.5, 21.5, -62.5], mark: [52.5, 5, -63.2], dir: null, d: 0.62},
+  {k: 'PLUG & PLAY', t: 'Plug in and meet', p: 'Connect Ethernet for your local network or the internet, add USB-C power, and it\'s ready. No software to install.', at: [94, 15, -45.8], mark: [94.7, 27, -45.8], dir: null, d: 0.62}
 ];
 let center = new THREE.Vector3(), ready = false;
 const tex = new THREE.TextureLoader().load('/static/site/vipcon_screen.jpg', t => { t.colorSpace = THREE.SRGBColorSpace; t.flipY = false; t.anisotropy = 8; });
 tex.flipY = false;
-new GLTFLoader().load('/static/site/vipcon_device.glb', onModel, undefined, onFail);
+new GLTFLoader().load('/static/site/vipcon_device.glb?v=3', onModel, undefined, onFail);
 function onFail() { hero.classList.add('nogl'); loader.textContent = ''; }
 function onModel(g) {
   g.scene.traverse(o => {
     if (!o.isMesh) return;
     const n = o.name.toLowerCase();
+    // the Pi's GPIO header pins glint through the vents and distract from the case; leave them out
+    if (n.includes('gpio')) { o.visible = false; return; }
     o.castShadow = o.receiveShadow = true;
     // ports, PCB and board parts keep the materials made for them in Blender (Web_*)
-    if (o.material && o.material.name.startsWith('Web_')) { o.castShadow = false; o.material.envMapIntensity = 1.4; return; }
+    if (o.material && o.material.name.startsWith('Web_')) {
+      o.castShadow = false; o.material.envMapIntensity = 1.4;
+      // board shows through the vents and port openings: dark charcoal solder mask instead of green,
+      // a touch lighter than the black chips (Web_Chip) so they still read against it
+      if (o.material.name === 'Web_PCB') { o.material.color.setRGB(0.045, 0.047, 0.052); o.material.roughness = 0.55; }
+      return;
+    }
     if (n.includes('screen')) { o.material = new THREE.MeshBasicMaterial({map: tex, toneMapped: false, polygonOffset: true, polygonOffsetFactor: -2}); o.castShadow = false; }
     else if (n.includes('glass')) o.material = M.glass;
     else if (n.includes('shell')) o.material = M.shell;
@@ -83,7 +91,7 @@ function onModel(g) {
   HOT.forEach((h, i) => {
     h.w = inner.localToWorld(new THREE.Vector3(...h.at));
     h.m = inner.localToWorld(new THREE.Vector3(...(h.mark || h.at)));
-    const dir = h.dir ? new THREE.Vector3(...h.dir) : h.w.clone().sub(center).setY(0).normalize().add(new THREE.Vector3(0, 0.55, 0));
+    const dir = h.dir ? new THREE.Vector3(...h.dir) : h.w.clone().sub(center).setY(0).normalize().add(new THREE.Vector3(0, h.up ?? 0.55, 0));
     h.cam = h.w.clone().add(dir.normalize().multiplyScalar(h.d));
     const b = document.createElement('button'); b.className = 'hot'; b.type = 'button';
     b.innerHTML = '<i>+</i><span></span>'; b.querySelector('span').textContent = h.t;
@@ -93,12 +101,13 @@ function onModel(g) {
   });
   buildDims();
   ready = true; loader.style.opacity = 0; goHome(false);
-  playIntro(6800);
+  // open with the cinematic tour (it starts with the size intro); visitors who ask for less motion get the intro only
+  if (reduce) playIntro(6800); else startTour();
 }
 
 // opening "portable" intro: white dimension lines draw along the device, then its size and weight,
 // with the caption; it fades out by itself (or as soon as the visitor takes over) and the turntable starts
-const PORTABLE = {k: 'PORTABLE', t: 'A meeting server you can carry', p: 'The whole meeting server fits in your hand: 10.1 × 7.1 × 3.5 cm and about 145 g. Take it to any office, site or hotel room, plug it in and meet, with full control over every call.'};
+const PORTABLE = {k: 'PORTABLE', t: 'A meeting server you can carry', p: 'The whole meeting server fits in your hand: 10.2 × 6.9 × 3.3 cm and about 145 g. Take it to any office, site or hotel room, plug it in and meet, with full control over every call.'};
 const lineMat = new THREE.LineBasicMaterial({color: 0xffffff, transparent: true, opacity: 0, depthTest: false, toneMapped: false});
 const extMat = new THREE.LineBasicMaterial({color: 0xffffff, transparent: true, opacity: 0, depthTest: false, toneMapped: false});
 const dotMat = new THREE.MeshBasicMaterial({color: 0xffffff, transparent: true, opacity: 0, depthTest: false, toneMapped: false});
@@ -106,13 +115,13 @@ const dimsG = new THREE.Group(); dimsG.visible = false;
 const DIMS = [];
 let intro = null;
 function buildDims() {
-  // model space, millimetres: case x -8.2…92.8, y 0…35, z -64.2…7.2; z = -64.2 and x = -8.2 face the camera
-  const X0 = -8.2, X1 = 92.8, Z0 = -64.2, Z1 = 7.2, H = 35, O = 10, y = 0.3, c = O * 0.75;
+  // model space, millimetres: case x -7.2…94.7, y 0…32.5, z -63.2…6.2; z = -63.2 and x = -7.2 face the camera
+  const X0 = -7.2, X1 = 94.7, Z0 = -63.2, Z1 = 6.2, H = 32.5, O = 10, y = 0.3, c = O * 0.75;
   const V = (a, b, d) => new THREE.Vector3(a, b, d);
   const spec = [
-    {label: '10.1 cm', a: V(X1, y, Z0 - O), b: V(X0, y, Z0 - O), ext: [V(X1, y, Z0 - 2), V(X1, y, Z0 - O - 3), V(X0, y, Z0 - 2), V(X0, y, Z0 - O - 3)], t0: 300, d: 900},
-    {label: '7.1 cm', a: V(X0 - O, y, Z0), b: V(X0 - O, y, Z1), ext: [V(X0 - 2, y, Z0), V(X0 - O - 3, y, Z0), V(X0 - 2, y, Z1), V(X0 - O - 3, y, Z1)], t0: 1100, d: 800, at: 0.8},
-    {label: '3.5 cm', a: V(X1 + c, 0, Z0 - c), b: V(X1 + c, H, Z0 - c), ext: [V(X1 + 1, H, Z0 - 1), V(X1 + c + 3, H, Z0 - c - 3)], t0: 1800, d: 600},
+    {label: '10.2 cm', a: V(X1, y, Z0 - O), b: V(X0, y, Z0 - O), ext: [V(X1, y, Z0 - 2), V(X1, y, Z0 - O - 3), V(X0, y, Z0 - 2), V(X0, y, Z0 - O - 3)], t0: 300, d: 900},
+    {label: '6.9 cm', a: V(X0 - O, y, Z0), b: V(X0 - O, y, Z1), ext: [V(X0 - 2, y, Z0), V(X0 - O - 3, y, Z0), V(X0 - 2, y, Z1), V(X0 - O - 3, y, Z1)], t0: 1100, d: 800, at: 0.8},
+    {label: '3.3 cm', a: V(X1 + c, 0, Z0 - c), b: V(X1 + c, H, Z0 - c), ext: [V(X1 + 1, H, Z0 - 1), V(X1 + c + 3, H, Z0 - c - 3)], t0: 1800, d: 600},
   ];
   spec.forEach(s => {
     const geo = new THREE.BufferGeometry().setFromPoints([s.a, s.a.clone()]);
@@ -179,7 +188,7 @@ function fly(pos, tgt, ms = 1500) {
 function wide() { return box.clientWidth > 900; }
 function homePos() {
   const p = HOME.pos.clone(), t = HOME.tgt.clone();
-  if (!wide()) p.multiplyScalar(box.clientWidth < 600 ? 1.5 : 1.25);  // leave room for the size labels on phones
+  if (!wide()) p.multiplyScalar(box.clientWidth < 600 ? 1.75 : 1.25);  // leave room for the size labels and caption on phones
   return {p, t};
 }
 function goHome(animate = true) {
@@ -193,7 +202,9 @@ function focus(i) {
   focused = i; controls.autoRotate = false;
   HOT.forEach((x, j) => x.el.classList.toggle('on', j === i));
   capK.textContent = h.k; capT.textContent = h.t; capP.textContent = h.p; cap.classList.add('show');
-  fly(h.cam, h.w);
+  // phones and tablets: stand further back so the feature stays clear of the caption panel below it
+  const k = wide() ? 1 : box.clientWidth < 600 ? 2.6 : 1.4;
+  fly(h.w.clone().add(h.cam.clone().sub(h.w).multiplyScalar(k)), h.w);
 }
 
 // cinematic tour: glide through every detail, then a slow orbit
@@ -203,9 +214,12 @@ function step() {
   if (i === 0) { goHome(); playIntro(4400); } else focus(i - 1);
   tourT = setTimeout(step, reduce ? 4000 : i === 0 ? 5400 : 4600);
 }
-function startTour() { if (!ready) return; tourBtn.setAttribute('aria-pressed', 'true'); tourBtn.querySelector('span').textContent = 'Stop tour'; tourI = 0; step(); }
-function stopTour() { clearTimeout(tourT); tourT = null; tourBtn.setAttribute('aria-pressed', 'false'); tourBtn.querySelector('span').textContent = 'Cinematic tour'; }
+// during the tour the caption shows only the kicker and title; a hotspot clicked by hand still gets the full text
+function startTour() { if (!ready) return; tourBtn.setAttribute('aria-pressed', 'true'); tourBtn.querySelector('span').textContent = 'Stop tour'; cap.classList.add('brief'); tourI = 0; step(); }
+function stopTour() { clearTimeout(tourT); tourT = null; cap.classList.remove('brief'); tourBtn.setAttribute('aria-pressed', 'false'); tourBtn.querySelector('span').textContent = 'Cinematic tour'; }
 tourBtn.addEventListener('click', () => tourT ? (stopTour(), endIntro(), goHome()) : startTour());
+// the tour stops for good once the device scrolls out of view, so it does not keep flying the camera unseen
+if ('IntersectionObserver' in window) new IntersectionObserver(es => { if (!es[0].isIntersecting && tourT) { stopTour(); endIntro(true); goHome(false); } }, {threshold: 0.15}).observe(box);
 resetBtn.addEventListener('click', () => { stopTour(); endIntro(); goHome(); });
 exploreBtn.addEventListener('click', () => { if (!wide()) box.scrollIntoView({behavior: reduce ? 'auto' : 'smooth'}); stopTour(); startTour(); });
 controls.addEventListener('start', () => { anim = null; stopTour(); endIntro(true); controls.autoRotate = false; });
@@ -226,7 +240,8 @@ function size() {
   const w = box.clientWidth, h = box.clientHeight;
   renderer.setSize(w, h, false); camera.aspect = w / h;
   // on wide screens shift the device into the right part of the frame, clear of the copy
-  if (w > 900) camera.setViewOffset(w, h, -w * 0.18, 0, w, h); else camera.clearViewOffset();
+  // wide: device right of the copy; narrow: lifted so it sits above the caption panel
+  if (w > 900) camera.setViewOffset(w, h, -w * 0.18, 0, w, h); else camera.setViewOffset(w, h, 0, h * (w < 600 ? 0.12 : 0.07), w, h);
   camera.updateProjectionMatrix();
 }
 const ro = new ResizeObserver(() => { size(); if (ready && focused < 0 && !anim) goHome(false); }); ro.observe(box); size();
