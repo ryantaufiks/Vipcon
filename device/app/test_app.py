@@ -492,15 +492,16 @@ def test_a_host_admits_only_into_their_own_meeting(client, monkeypatch):
     h1, h2 = sign_in(client, "lobbyhost1"), sign_in(client, "lobbyhost2")
     mine = client.post("/api/v1/meetings", json={"title": "Mine", "lobby": True}, headers=h1).json()
     theirs = client.post("/api/v1/meetings", json={"title": "Theirs", "lobby": True}, headers=h2).json()
-    assert client.post("/api/v1/join", json={"room": theirs["room_name"], "identity": "Visitor"}).json()["status"] == "waiting"
+    asked = client.post("/api/v1/join", json={"room": theirs["room_name"], "identity": "Visitor"}).json()
+    assert asked["status"] == "waiting"
     req = client.get(f"/api/v1/meetings/{theirs['id']}/lobby", headers=h2).json()[0]
+    q = f"room={theirs['room_name']}&identity=Visitor&ticket={asked['ticket']}"
     # Host 1 names their own meeting but host 2's waiting guest: refused, and the guest stays waiting.
     assert client.post(f"/api/v1/meetings/{mine['id']}/lobby/{req['id']}/admit", headers=h1).status_code == 404
     assert client.post(f"/api/v1/meetings/{mine['id']}/lobby/{req['id']}/reject", headers=h1).status_code == 200
-    status = client.get(f"/api/v1/lobby/status?room={theirs['room_name']}&identity=Visitor").json()
-    assert status == {"status": "waiting"}
+    assert client.get(f"/api/v1/lobby/status?{q}").json() == {"status": "waiting"}
     assert client.post(f"/api/v1/meetings/{theirs['id']}/lobby/{req['id']}/admit", headers=h2).status_code == 200
-    assert "token" in client.get(f"/api/v1/lobby/status?room={theirs['room_name']}&identity=Visitor").json()
+    assert "token" in client.get(f"/api/v1/lobby/status?{q}").json()
 
 
 def test_an_admission_survives_a_lost_poll(client, monkeypatch):
@@ -510,9 +511,13 @@ def test_an_admission_survives_a_lost_poll(client, monkeypatch):
     monkeypatch.setattr(main, "livekit_credentials", lambda: ("devkey", "devsecret"))
     auth = {"Authorization": f"Bearer {token(client)}"}
     m = client.post("/api/v1/meetings", json={"title": "Lobby", "lobby": True}, headers=auth).json()
-    status = lambda who: client.get(f"/api/v1/lobby/status?room={m['room_name']}&identity={who}").json()  # noqa: E731
+    tickets = {}
+    status = lambda who: client.get(  # noqa: E731
+        f"/api/v1/lobby/status?room={m['room_name']}&identity={who}&ticket={tickets[who]}").json()
     for who in ("Guest1", "Guest2"):
-        assert client.post("/api/v1/join", json={"room": m["room_name"], "identity": who}).json()["status"] == "waiting"
+        asked = client.post("/api/v1/join", json={"room": m["room_name"], "identity": who}).json()
+        assert asked["status"] == "waiting"
+        tickets[who] = asked["ticket"]
     waiting = client.get(f"/api/v1/meetings/{m['id']}/lobby", headers=auth).json()
     assert [r["identity"] for r in waiting] == ["Guest1", "Guest2"]
     g1, g2 = (r["id"] for r in waiting)
@@ -524,6 +529,86 @@ def test_an_admission_survives_a_lost_poll(client, monkeypatch):
     # Turned away, they may ask again: back in the queue.
     assert client.post("/api/v1/join", json={"room": m["room_name"], "identity": "Guest2"}).json()["status"] == "waiting"
     assert [r["identity"] for r in client.get(f"/api/v1/meetings/{m['id']}/lobby", headers=auth).json()] == ["Guest2"]
+
+
+def test_only_the_guest_who_asked_collects_the_admission(client, monkeypatch):
+    """Knowing a waiting guest's name is not enough to take their place."""
+    monkeypatch.setattr(main, "MAX_CONCURRENT_MEETINGS", 100)
+    monkeypatch.setattr(main, "livekit_credentials", lambda: ("devkey", "devsecret"))
+    auth = {"Authorization": f"Bearer {token(client)}"}
+    m = client.post("/api/v1/meetings", json={"title": "Tickets", "lobby": True}, headers=auth).json()
+    asked = client.post("/api/v1/join", json={"room": m["room_name"], "identity": "Ann"}).json()
+    req = client.get(f"/api/v1/meetings/{m['id']}/lobby", headers=auth).json()[0]
+    client.post(f"/api/v1/meetings/{m['id']}/lobby/{req['id']}/admit", headers=auth)
+    base = f"/api/v1/lobby/status?room={m['room_name']}&identity=Ann"
+    assert client.get(base).status_code == 403
+    assert client.get(base + "&ticket=guess").status_code == 403
+    assert "token" in client.get(f"{base}&ticket={asked['ticket']}").json()
+
+
+def test_a_removed_guest_cannot_walk_back_in(client, monkeypatch):
+    monkeypatch.setattr(main, "MAX_CONCURRENT_MEETINGS", 100)
+    monkeypatch.setattr(main, "livekit_credentials", lambda: ("devkey", "devsecret"))
+    removed = []
+    monkeypatch.setattr(main, "remove_participant", lambda room, who: removed.append((room, who)))
+    auth = {"Authorization": f"Bearer {token(client)}"}
+    m = client.post("/api/v1/meetings", json={"title": "Kick", "lobby": True}, headers=auth).json()
+    asked = client.post("/api/v1/join", json={"room": m["room_name"], "identity": "Troll"}).json()
+    req = client.get(f"/api/v1/meetings/{m['id']}/lobby", headers=auth).json()[0]
+    client.post(f"/api/v1/meetings/{m['id']}/lobby/{req['id']}/admit", headers=auth)
+    status = f"/api/v1/lobby/status?room={m['room_name']}&identity=Troll&ticket={asked['ticket']}"
+    assert "token" in client.get(status).json()
+    assert client.post(f"/api/v1/meetings/{m['id']}/moderate/kick", json={"identity": "Troll"}, headers=auth).json() == {"ok": True}
+    assert removed == [(m["room_name"], "Troll")]
+    assert client.get(status).json() == {"status": "removed"}  # the old admission is gone
+    # Asking again puts them back in the queue: the host decides again.
+    again = client.post("/api/v1/join", json={"room": m["room_name"], "identity": "Troll"}).json()
+    assert again["status"] == "waiting" and again["ticket"] != asked["ticket"]
+    assert [r["identity"] for r in client.get(f"/api/v1/meetings/{m['id']}/lobby", headers=auth).json()] == ["Troll"]
+
+
+def test_a_locked_meeting_takes_no_one_new(client, monkeypatch):
+    monkeypatch.setattr(main, "MAX_CONCURRENT_MEETINGS", 100)
+    monkeypatch.setattr(main, "livekit_credentials", lambda: ("devkey", "devsecret"))
+    host, other = sign_in(client, "lobbyhost1"), sign_in(client, "lobbyhost2")  # made by an earlier test (user limit)
+    m = client.post("/api/v1/meetings", json={"title": "Lock", "lobby": False}, headers=host).json()
+    assert client.post(f"/api/v1/meetings/{m['id']}/lock", json={"locked": True}, headers=other).status_code == 403
+    assert client.post(f"/api/v1/meetings/{m['id']}/lock", json={"locked": True}, headers=host).json()["locked"] is True
+    assert client.get(f"/api/v1/meeting-info?room={m['room_name']}").json()["locked"] is True
+    assert client.post("/api/v1/join", json={"room": m["room_name"], "identity": "Late"}).status_code == 403
+    assert client.post("/api/v1/token", json={"room": m["room_name"], "identity": "Host"}, headers=host).json()["host"] is True
+    assert client.post("/api/v1/token", json={"room": m["room_name"], "identity": "Staff"}, headers=other).status_code == 403
+    client.post(f"/api/v1/meetings/{m['id']}/lock", json={"locked": False}, headers=host)
+    assert "token" in client.post("/api/v1/join", json={"room": m["room_name"], "identity": "Late"}).json()
+
+
+def test_mute_all_spares_the_hosts_and_screen_audio(monkeypatch):
+    import livekit_admin
+    people = [
+        {"identity": "Host", "metadata": '{"host": true}', "tracks": [{"sid": "TR_h", "type": "AUDIO", "source": "MICROPHONE"}]},
+        {"identity": "Ann", "metadata": '{"host": false}', "tracks": [
+            {"sid": "TR_screen", "type": "AUDIO", "source": "SCREEN_SHARE_AUDIO"},
+            {"sid": "TR_ann", "type": "AUDIO", "source": "MICROPHONE"}]},
+        {"identity": "Bob", "metadata": "", "tracks": [{"sid": "TR_bob", "type": "AUDIO", "source": "MICROPHONE", "muted": True}]},
+        {"identity": "Cam", "metadata": "", "tracks": [{"sid": "TR_cam", "type": "VIDEO", "source": "CAMERA"}]},
+    ]
+    calls = []
+    monkeypatch.setattr(livekit_admin, "list_participants", lambda room: {"participants": people})
+    monkeypatch.setattr(livekit_admin, "_rpc", lambda method, body, room, grants=None: calls.append((method, body["identity"], body["track_sid"])) or {})
+    assert livekit_admin.mute_all("r") == 1
+    assert calls == [("MutePublishedTrack", "Ann", "TR_ann")]
+    calls.clear()
+    livekit_admin.mute_participant("r", "Ann", True)
+    assert calls == [("MutePublishedTrack", "Ann", "TR_ann")]  # the microphone, not the shared screen's audio
+
+
+def test_mute_all_needs_the_host(client, monkeypatch):
+    monkeypatch.setattr(main, "MAX_CONCURRENT_MEETINGS", 100)
+    monkeypatch.setattr(main, "mute_all", lambda room: 3)
+    owner, stranger = sign_in(client, "lobbyhost1"), sign_in(client, "lobbyhost2")
+    m = client.post("/api/v1/meetings", json={"title": "Quiet"}, headers=owner).json()
+    assert client.post(f"/api/v1/meetings/{m['id']}/moderate/mute-all", headers=stranger).status_code == 403
+    assert client.post(f"/api/v1/meetings/{m['id']}/moderate/mute-all", headers=owner).json() == {"ok": True, "muted": 3}
 
 
 # ---------------------------------------------------------------- encrypted backup (keep these last: restore swaps the DB)

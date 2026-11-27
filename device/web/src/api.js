@@ -45,8 +45,9 @@ export async function hostToken(room, identity, token) {
   return api('POST', '/token', { room, identity }, token)
 }
 
-export async function lobbyStatus(room, identity) {
-  return api('GET', `/lobby/status?room=${encodeURIComponent(room)}&identity=${encodeURIComponent(identity)}`)
+export async function lobbyStatus(room, identity, ticket) {
+  const q = new URLSearchParams({ room, identity, ticket: ticket || '' })
+  return api('GET', `/lobby/status?${q}`)
 }
 
 export async function login(username, password, totp) {
@@ -103,6 +104,14 @@ export async function kickParticipant(token, meetingId, identity) {
 
 export async function muteParticipant(token, meetingId, identity, muted) {
   return api('POST', `/meetings/${meetingId}/moderate/mute`, { identity, muted }, token)
+}
+
+export async function muteAll(token, meetingId) {
+  return api('POST', `/meetings/${meetingId}/moderate/mute-all`, {}, token)
+}
+
+export async function lockMeeting(token, meetingId, locked) {
+  return api('POST', `/meetings/${meetingId}/lock`, { locked }, token)
 }
 
 export async function claimStatus() {

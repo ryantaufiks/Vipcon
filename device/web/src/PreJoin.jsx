@@ -150,7 +150,7 @@ export default function PreJoin({ room, signedIn, asHost, onJoined }) {
   const [e2eeKey, setE2eeKey] = useState(() => takeKeyFromLink(room))
   const [keyError, setKeyError] = useState('')
   const [busy, setBusy] = useState(false)
-  const [waiting, setWaiting] = useState(false)
+  const [waiting, setWaiting] = useState(false) // false, or the ticket that collects the host's answer
   const [error, setError] = useState('')
   const [nameError, setNameError] = useState('')
   const media = useMediaPreview()
@@ -197,7 +197,7 @@ export default function PreJoin({ room, signedIn, asHost, onJoined }) {
         enter(await hostToken(room, n, getToken()))
       } else {
         const data = await joinRoom(room, n, passcode.trim())
-        if (data.status === 'waiting') setWaiting(true)
+        if (data.status === 'waiting') setWaiting(data.ticket || true)
         else enter(data)
       }
     } catch (err) {
@@ -216,14 +216,18 @@ export default function PreJoin({ room, signedIn, asHost, onJoined }) {
     let cancelled = false
     async function poll() {
       try {
-        const data = await lobbyStatus(room, name.trim())
+        const data = await lobbyStatus(room, name.trim(), waiting)
         if (cancelled) return
         if (data.token) enterRef.current(data)
-        else if (data.status === 'rejected') {
+        else if (data.status === 'rejected' || data.status === 'removed') {
           setWaiting(false)
-          setError('The host declined your request to join.')
+          setError(data.status === 'removed' ? 'The host removed you from this meeting.' : 'The host declined your request to join.')
         }
-      } catch { /* keep waiting */ }
+      } catch (err) {
+        if (cancelled || err.status !== 403) return // keep waiting through network trouble
+        setWaiting(false) // the request was replaced (the same name asked again elsewhere)
+        setError('Your request to join is no longer valid. Ask to join again.')
+      }
     }
     poll()
     const t = setInterval(poll, 2000)
@@ -290,10 +294,10 @@ export default function PreJoin({ room, signedIn, asHost, onJoined }) {
               )}
               {error && <Notice kind="error">{error}</Notice>}
               <Button type="submit" variant="primary" size="lg" block loading={busy}
-                      disabled={info?.locked || (info?.e2ee && !e2eeSupported())}>
+                      disabled={(info?.locked && !signedIn) || (info?.e2ee && !e2eeSupported())}>
                 {asHost ? 'Start meeting' : signedIn ? 'Join meeting' : info?.lobby ? 'Ask to join' : 'Join meeting'}
               </Button>
-              {info?.locked && <p className="field-hint">The host has locked this meeting.</p>}
+              {info?.locked && !signedIn && <p className="field-hint">The host has locked this meeting.</p>}
               {asHost && <p className="field-hint">You join as host and can admit guests from the People panel.</p>}
               {signedIn && !asHost && <p className="field-hint">You’re signed in, so you join directly — no passcode or waiting room.</p>}
             </form>

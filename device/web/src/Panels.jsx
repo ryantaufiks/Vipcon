@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Track } from 'livekit-client'
 import { Avatar, Button, Menu, MenuItem } from './ui.jsx'
-import { X, Send, Mic, Camera, More, DoorIn } from './icons.jsx'
+import { X, Send, Mic, Camera, More, DoorIn, Lock } from './icons.jsx'
 import { time } from './format.js'
 
 function PanelShell({ title, onClose, children }) {
@@ -58,9 +58,24 @@ export function ChatPanel({ messages, me, onSend, onClose }) {
   )
 }
 
-export function PeoplePanel({ participants, localIdentity, isHost, lobby, onAdmit, onReject, onAdmitAll, onKick, onMute, onClose }) {
+export function PeoplePanel({ participants, localIdentity, isHost, lobby, locked, onAdmit, onReject, onAdmitAll, onKick, onMute,
+  onMuteAll, onLock, onClose }) {
+  const isHostOf = (p) => { try { return !!JSON.parse(p.metadata || '{}').host } catch { return false } }
+  const othersTalking = participants.some((p) => p.identity !== localIdentity && !isHostOf(p)
+    && p.getTrackPublication(Track.Source.Microphone) && !p.getTrackPublication(Track.Source.Microphone).isMuted)
   return (
     <PanelShell title={`People (${participants.length})`} onClose={onClose}>
+      {isHost && (
+        <div className="host-tools">
+          <Button size="sm" icon={<Mic off size={16} />} onClick={onMuteAll} disabled={!othersTalking}
+                  title="Mute everyone except the hosts. They can unmute themselves.">Mute all</Button>
+          <Button size="sm" variant={locked ? 'primary' : 'secondary'} icon={<Lock size={16} />} onClick={() => onLock(!locked)}
+                  aria-pressed={!!locked} title={locked ? 'Let new people join or ask to join again' : 'Stop anyone new from joining'}>
+            {locked ? 'Unlock meeting' : 'Lock meeting'}
+          </Button>
+        </div>
+      )}
+      {isHost && locked && <p className="host-note"><Lock size={13} /> Locked: no one new can join or ask to join.</p>}
       <div className="side-body">
         {isHost && lobby.length > 0 && (
           <>
@@ -89,7 +104,7 @@ export function PeoplePanel({ participants, localIdentity, isHost, lobby, onAdmi
           const cam = p.getTrackPublication(Track.Source.Camera)
           const micOn = !!mic && !mic.isMuted
           const camOn = !!cam && !cam.isMuted
-          const host = (() => { try { return JSON.parse(p.metadata || '{}').host } catch { return false } })()
+          const host = isHostOf(p)
           return (
             <div key={p.sid || p.identity} className="person">
               <Avatar name={p.identity} size={30} />

@@ -67,7 +67,8 @@ class LobbyRequest(Base):
     id = Column(Integer, primary_key=True)
     room_name = Column(String, index=True)
     identity = Column(String)
-    status = Column(String, default="waiting")
+    status = Column(String, default="waiting")  # waiting | admitted | rejected | removed
+    ticket_hash = Column(String)  # sha256 of the guest's ticket for this request
     created_at = Column(DateTime, default=now)
 
 
