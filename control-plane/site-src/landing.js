@@ -51,7 +51,7 @@ const M = {
 // and where the marker sits: on an edge next to the feature, so it never covers the screen, vents or ports
 const HOT = [
   {k: 'YOUR BRAND', t: 'Your logo on the screen', p: 'The 3.5″ touch screen shows your company\'s logo and tagline, set from the management console. Tap it to start a meeting.', at: [42.5, 31.5, -28], mark: [0, 32.5, -57], dir: [0, 1.25, 0.55], d: 0.85},
-  {k: 'FACETED SHELL', t: 'Textured shell, protected screen', p: 'A faceted, studded shell that sits firmly in the hand and hides scuffs and fingerprints. The touch screen is set 2 mm below the raised bezel, so it stays clear of knocks in a bag.', at: [4, 24, -54], mark: [-7.2, 18, -63.2], up: 0.8, dir: null, d: 1.15},
+  {k: 'DESIGN', t: 'Modern, urban design', p: 'A clean faceted shell in light grey and graphite that fits any boardroom, studio or hotel room. Angled vents let warm air out, so it stays cool without a fan.', at: [4, 24, -54], mark: [-7.2, 18, -63.2], up: 0.8, dir: null, d: 1.15},
   {k: 'COOLING', t: 'Silent passive cooling', p: 'Air enters below and leaves through angled side vents, keeping the device at a steady temperature. No fan, no noise.', at: [52.5, 21.5, -62.5], mark: [52.5, 5, -63.2], dir: null, d: 0.62},
   {k: 'PLUG & PLAY', t: 'Plug in and meet', p: 'Connect Ethernet for your local network or the internet, add USB-C power, and it\'s ready. No software to install.', at: [94, 15, -45.8], mark: [94.7, 27, -45.8], dir: null, d: 0.62}
 ];
