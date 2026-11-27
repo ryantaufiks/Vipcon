@@ -72,7 +72,7 @@ nav a{text-decoration:none;color:var(--mute)}nav a:hover{color:var(--ink)}
 .caption small{color:var(--gold);font:600 12px var(--display);letter-spacing:.2em}
 .caption h3{font-size:22px;margin:6px 0 8px}
 .caption p{margin:0;color:#cfccc6;font-size:15px}
-.caption.brief{padding:14px 20px}.caption.brief p{display:none}.caption.brief h3{margin-bottom:0}
+.caption.brief,.caption.intro{padding:14px 20px}.caption.brief p,.caption.intro p{display:none}.caption.brief h3,.caption.intro h3{margin-bottom:0}
 .dock{position:absolute;z-index:3;right:max(4vw,16px);bottom:28px;display:flex;gap:8px;padding:6px}
 .dock button{min-height:44px;padding:0 16px;border-radius:12px;border:0;background:transparent;color:var(--ink);font:600 14px var(--sans);cursor:pointer;display:flex;align-items:center;gap:8px}
 .dock button:hover,.dock button[aria-pressed=true]{background:rgba(242,179,61,.16);color:var(--gold2)}
