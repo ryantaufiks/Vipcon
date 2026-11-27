@@ -64,6 +64,8 @@ function onModel(g) {
   g.scene.traverse(o => {
     if (!o.isMesh) return;
     const n = o.name.toLowerCase();
+    // the Pi's GPIO header pins glint through the vents and distract from the case; leave them out
+    if (n.includes('gpio')) { o.visible = false; return; }
     o.castShadow = o.receiveShadow = true;
     // ports, PCB and board parts keep the materials made for them in Blender (Web_*)
     if (o.material && o.material.name.startsWith('Web_')) {
