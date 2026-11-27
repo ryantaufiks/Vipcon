@@ -79,6 +79,7 @@
           <li>Device health: temperature, storage, uptime, software version</li>
           <li>Licence status</li>
           <li>The device's local network address, to give you a private office link</li>
+          <li>Only if you turn it on: a daily backup of accounts and schedules, encrypted on the device with a key only you hold</li>
         </ul>
       </div>
     </div>
@@ -96,12 +97,12 @@
     <h2>Protected at every layer</h2>
     <p class="sub">Built-in protections on every VIPCON device, with more on the way.</p>
     <div class="grid3">
-      <article class="card glass"><svg viewBox="0 0 40 40" aria-hidden="true"><rect x="7" y="9" width="26" height="18" rx="3"/><path d="M14 33h12M20 27v6M15 18l4 4 7-8"/></svg><h3>Data stays on the device</h3><p>Meetings run on the device itself. No recordings, no media storage, and only device health and licence status ever leave the building.</p></article>
+      <article class="card glass"><svg viewBox="0 0 40 40" aria-hidden="true"><rect x="7" y="9" width="26" height="18" rx="3"/><path d="M14 33h12M20 27v6M15 18l4 4 7-8"/></svg><h3>Data stays on the device</h3><p>Meetings run on the device itself. No recordings, no media storage. Only device health and licence status leave the building, plus an optional backup that is encrypted on the device with a key only you hold.</p></article>
       <article class="card glass"><svg viewBox="0 0 40 40" aria-hidden="true"><rect x="10" y="18" width="20" height="15" rx="3"/><path d="M14 18v-5a6 6 0 0 1 12 0v5M20 24v4"/></svg><h3>Encrypted in transit</h3><p>HTTPS for every connection and encrypted audio and video. Guests outside the office connect over TLS on port 443, through an outbound-only tunnel: no inbound ports to open.</p></article>
       <article class="card glass"><svg viewBox="0 0 40 40" aria-hidden="true"><circle cx="16" cy="13" r="6"/><path d="M4 33c0-6.6 5.4-12 12-12 3 0 5.7 1.1 7.8 2.9"/><path d="M24 29l4 4 8-9"/></svg><h3>You decide who joins</h3><p>Passcodes for each meeting, a lobby where the host admits every guest, host controls to mute or remove, and separate roles for admins, hosts and members.</p></article>
-      <article class="card glass"><svg viewBox="0 0 40 40" aria-hidden="true"><path d="M20 4 7 9v10c0 8 5.5 14 13 17 7.5-3 13-9 13-17V9z"/><path d="M14 20l4 4 8-8"/></svg><h3>Hardened sign-in</h3><p>Passwords stored with strong one-way hashing, accounts that lock after repeated failed attempts, rate-limited passcodes and sessions that expire on their own.</p></article>
+      <article class="card glass"><svg viewBox="0 0 40 40" aria-hidden="true"><path d="M20 4 7 9v10c0 8 5.5 14 13 17 7.5-3 13-9 13-17V9z"/><path d="M14 20l4 4 8-8"/></svg><h3>Hardened sign-in</h3><p>Passwords stored with strong one-way hashing, accounts that lock after repeated failed attempts, rate-limited passcodes, sessions that expire on their own, and a Recovery Kit so a forgotten admin password never means starting over.</p></article>
       <article class="card glass"><svg viewBox="0 0 40 40" aria-hidden="true"><path d="M8 30l7-2 15-15a3.5 3.5 0 0 0-5-5L10 23z"/><path d="M22 11l5 5M8 34h24"/></svg><h3>Signed and verified</h3><p>Every message between the device and its management service is signed, licences are cryptographically signed, and the management console requires two-factor sign-in.</p></article>
-      <article class="card glass soon-card"><svg viewBox="0 0 40 40" aria-hidden="true"><circle cx="20" cy="20" r="14"/><path d="M20 12v8l5 4"/></svg><h3>On the way <span class="soon">Coming soon</span></h3><ul class="soonlist"><li>End-to-end encryption, so media stays encrypted even on the device</li><li>Two-factor sign-in for admins and hosts</li><li>Encrypted off-site backups of accounts and schedules</li></ul></article>
+      <article class="card glass soon-card"><svg viewBox="0 0 40 40" aria-hidden="true"><circle cx="20" cy="20" r="14"/><path d="M20 12v8l5 4"/></svg><h3>On the way <span class="soon">Coming soon</span></h3><ul class="soonlist"><li>End-to-end encryption, so media stays encrypted even on the device</li><li>Two-factor sign-in for admins and hosts</li></ul></article>
     </div>
   </div>
 </section>
@@ -176,7 +177,7 @@
       </div>
       <ul>
         <li><b>Data residency.</b> Meeting data is processed and stored on the device, on your premises.</li>
-        <li><b>Data minimisation.</b> Only device health and licence status ever leave the building.</li>
+        <li><b>Data minimisation.</b> Only device health and licence status leave the building, plus optional backups that only your key can open.</li>
         <li><b>No third-party processors</b> for video, audio, chat or participant names.</li>
         <li><b>You stay in control.</b> Your administrators decide who has an account.</li>
       </ul>
