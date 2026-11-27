@@ -84,6 +84,9 @@ nav a{text-decoration:none;color:var(--mute)}nav a:hover{color:var(--ink)}
   .dock button:hover,.dock button[aria-pressed=true]{background:rgba(242,179,61,.18)}
   .dock button svg{width:20px;height:20px}
   .dock button span{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);clip-path:inset(50%);white-space:nowrap}
+  /* captions: kicker and title only, so the device stays visible; the description is still read by screen readers */
+  .caption{padding:14px 20px}.caption h3{margin-bottom:0}
+  .caption p{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);clip-path:inset(50%);white-space:nowrap}
 }
 .loader{position:absolute;z-index:4;left:50%;top:50%;transform:translate(-50%,-50%);font:600 14px var(--sans);color:var(--mute);letter-spacing:.08em;transition:opacity .5s}
 @media(max-width:900px){
