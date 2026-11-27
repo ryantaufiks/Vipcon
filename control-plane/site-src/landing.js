@@ -209,8 +209,9 @@ function step() {
   if (i === 0) { goHome(); playIntro(4400); } else focus(i - 1);
   tourT = setTimeout(step, reduce ? 4000 : i === 0 ? 5400 : 4600);
 }
-function startTour() { if (!ready) return; tourBtn.setAttribute('aria-pressed', 'true'); tourBtn.querySelector('span').textContent = 'Stop tour'; tourI = 0; step(); }
-function stopTour() { clearTimeout(tourT); tourT = null; tourBtn.setAttribute('aria-pressed', 'false'); tourBtn.querySelector('span').textContent = 'Cinematic tour'; }
+// during the tour the caption shows only the kicker and title; a hotspot clicked by hand still gets the full text
+function startTour() { if (!ready) return; tourBtn.setAttribute('aria-pressed', 'true'); tourBtn.querySelector('span').textContent = 'Stop tour'; cap.classList.add('brief'); tourI = 0; step(); }
+function stopTour() { clearTimeout(tourT); tourT = null; cap.classList.remove('brief'); tourBtn.setAttribute('aria-pressed', 'false'); tourBtn.querySelector('span').textContent = 'Cinematic tour'; }
 tourBtn.addEventListener('click', () => tourT ? (stopTour(), endIntro(), goHome()) : startTour());
 resetBtn.addEventListener('click', () => { stopTour(); endIntro(); goHome(); });
 exploreBtn.addEventListener('click', () => { if (!wide()) box.scrollIntoView({behavior: reduce ? 'auto' : 'smooth'}); stopTour(); startTour(); });
