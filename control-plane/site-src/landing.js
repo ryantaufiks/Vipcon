@@ -101,7 +101,8 @@ function onModel(g) {
   });
   buildDims();
   ready = true; loader.style.opacity = 0; goHome(false);
-  playIntro(6800);
+  // open with the cinematic tour (it starts with the size intro); visitors who ask for less motion get the intro only
+  if (reduce) playIntro(6800); else startTour();
 }
 
 // opening "portable" intro: white dimension lines draw along the device, then its size and weight,
@@ -217,6 +218,8 @@ function step() {
 function startTour() { if (!ready) return; tourBtn.setAttribute('aria-pressed', 'true'); tourBtn.querySelector('span').textContent = 'Stop tour'; cap.classList.add('brief'); tourI = 0; step(); }
 function stopTour() { clearTimeout(tourT); tourT = null; cap.classList.remove('brief'); tourBtn.setAttribute('aria-pressed', 'false'); tourBtn.querySelector('span').textContent = 'Cinematic tour'; }
 tourBtn.addEventListener('click', () => tourT ? (stopTour(), endIntro(), goHome()) : startTour());
+// the tour stops for good once the device scrolls out of view, so it does not keep flying the camera unseen
+if ('IntersectionObserver' in window) new IntersectionObserver(es => { if (!es[0].isIntersecting && tourT) { stopTour(); endIntro(true); goHome(false); } }, {threshold: 0.15}).observe(box);
 resetBtn.addEventListener('click', () => { stopTour(); endIntro(); goHome(); });
 exploreBtn.addEventListener('click', () => { if (!wide()) box.scrollIntoView({behavior: reduce ? 'auto' : 'smooth'}); stopTour(); startTour(); });
 controls.addEventListener('start', () => { anim = null; stopTour(); endIntro(true); controls.autoRotate = false; });
