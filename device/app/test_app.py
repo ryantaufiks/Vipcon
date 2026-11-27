@@ -473,6 +473,17 @@ def test_optional_fields_accept_null_as_the_web_app_sends_them(client, monkeypat
     assert client.post("/api/v1/settings", json={"org_name": None, "screen_reset": None}, headers=auth).status_code == 200
 
 
+def test_encrypted_meetings_never_hold_the_key(client, monkeypatch):
+    monkeypatch.setattr(main, "MAX_CONCURRENT_MEETINGS", 100)
+    auth = {"Authorization": f"Bearer {token(client)}"}
+    m = client.post("/api/v1/meetings", json={"title": "Encrypted board", "e2ee": True, "lobby": False}, headers=auth).json()
+    assert m["e2ee"] is True and "#" not in m["url"]  # the key is added by the host's browser, never by the device
+    info = client.get(f"/api/v1/meeting-info?room={m['room_name']}").json()
+    assert info["e2ee"] is True and not any("key" in k for k in info)
+    plain = client.post("/api/v1/meetings", json={"title": "Plain", "lobby": False}, headers=auth).json()
+    assert client.get(f"/api/v1/meeting-info?room={plain['room_name']}").json()["e2ee"] is False
+
+
 # ---------------------------------------------------------------- encrypted backup (keep these last: restore swaps the DB)
 
 

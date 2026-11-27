@@ -13,6 +13,7 @@ import {
 } from './icons.jsx'
 import { ForgotPassword, ChangePasswordModal, ResetUserPasswordModal, SecurityPage, useRecoveryStatus } from './Recovery.jsx'
 import { TwoFactorModal, TwoFactorGate } from './TwoFactor.jsx'
+import { e2eeSupported, newMeetingKey, rememberKey, knownKey, withKey } from './e2ee.js'
 import { when, dateParts, duration, nextQuarter, randomPasscode, inviteText, friendly, sessionExpired } from './format.js'
 
 const USERNAME_RE = /^[a-z0-9][a-z0-9._-]{2,31}$/
@@ -275,15 +276,28 @@ function MeetingsPage({ meetings, live, token, org, reload, fail, isAdmin, canCr
 
   const shown = groups[tab].filter((m) => m.title.toLowerCase().includes(query.trim().toLowerCase()))
 
+  function shareUrl(m) {
+    const key = m.e2ee ? knownKey(m.room_name) : ''
+    if (m.e2ee && !key) {
+      toast({ kind: 'error', message: 'This browser does not have this meeting’s encryption key. Use the invitation saved when it was created.' })
+      return null
+    }
+    return withKey(m.url || m.local_url, key)
+  }
+
   async function copyInvite(m) {
-    const ok = await copyText(inviteText({ title: m.title, url: m.url || m.local_url, scheduled_at: m.scheduled_at,
+    const url = shareUrl(m)
+    if (!url) return
+    const ok = await copyText(inviteText({ title: m.title, url, scheduled_at: m.scheduled_at,
       duration_minutes: m.duration_minutes, org }))
     toast(ok ? { message: m.has_passcode ? 'Invitation copied. Send the passcode separately.' : 'Invitation copied.' }
       : { kind: 'error', message: 'Could not copy. Select the link and copy it manually.' })
   }
 
   async function copyLink(m) {
-    const ok = await copyText(m.url || m.local_url)
+    const url = shareUrl(m)
+    if (!url) return
+    const ok = await copyText(url)
     toast(ok ? { message: 'Meeting link copied.' } : { kind: 'error', message: 'Could not copy the link.' })
   }
 
@@ -379,7 +393,9 @@ function MeetingRow({ m, live, onCopyInvite, onCopyLink, onEnd, onDelete }) {
   const ended = m.status === 'ended'
   const parts = dateParts(m.scheduled_at)
   const mine = m.can_host
-  const start = () => { window.location.href = `/m/${encodeURIComponent(m.room_name)}?${mine ? 'host' : 'staff'}=1` }
+  const start = () => {
+    window.location.href = withKey(`/m/${encodeURIComponent(m.room_name)}?${mine ? 'host' : 'staff'}=1`, m.e2ee ? knownKey(m.room_name) : '')
+  }
   return (
     <div className="list-row">
       <div className="row-main">
@@ -393,6 +409,7 @@ function MeetingRow({ m, live, onCopyInvite, onCopyLink, onEnd, onDelete }) {
             <span className="chip"><Clock size={14} />{when(m.scheduled_at)} · {duration(m.duration_minutes)}</span>
             {m.has_passcode && <span className="chip"><Lock size={14} />Passcode</span>}
             {m.lobby && <span className="chip hide-sm"><Shield size={14} />Waiting room</span>}
+            {m.e2ee && <span className="chip hide-sm"><Lock size={14} />End-to-end encrypted</span>}
             {!mine && m.host_name && <span className="chip hide-sm"><People size={14} />Host: {m.host_name}</span>}
           </span>
         </div>
@@ -436,11 +453,13 @@ function NewMeetingModal({ open, onClose, token, onCreated, fail }) {
   const [passcode, setPasscode] = useState(randomPasscode)
   const [lobby, setLobby] = useState(true)
   const [show, setShow] = useState(true)
+  const [e2ee, setE2ee] = useState(false)
   const [busy, setBusy] = useState(false)
   const [errors, setErrors] = useState({})
 
   useEffect(() => {
     if (!open) return
+    setE2ee(false)
     setTitle('')
     setScheduled(nextQuarter())
     setDur(60)
@@ -460,15 +479,18 @@ function NewMeetingModal({ open, onClose, token, onCreated, fail }) {
     if (Object.keys(errs).length) return
     setBusy(true)
     try {
+      const key = e2ee ? newMeetingKey() : null
       const m = await createMeeting(token, {
         title: title.trim(),
         scheduled_at: scheduled ? new Date(scheduled).toISOString() : null,
         passcode: usePass ? passcode : null,
         lobby,
+        e2ee,
         show_on_screen: show,
         duration_minutes: Number(dur),
       })
-      onCreated({ ...m, passcode: usePass ? passcode : null })
+      if (key) rememberKey(m.room_name, key)
+      onCreated({ ...m, passcode: usePass ? passcode : null, e2eeKey: key })
     } catch (err) {
       fail(err)
     } finally {
@@ -511,6 +533,10 @@ function NewMeetingModal({ open, onClose, token, onCreated, fail }) {
                   description="Guests wait until the host lets them in." />
           <Switch checked={show} onChange={setShow} label="Show on the room screen"
                   description="Listed on the device's “Meetings in progress” page while it runs." />
+          <Switch checked={e2ee} onChange={setE2ee} disabled={!e2eeSupported()} label="End-to-end encryption"
+                  description={e2eeSupported()
+                    ? 'Audio, video and screen sharing are encrypted in each browser; not even this device can see them. The key is only in the invitation link.'
+                    : 'Not available in this browser. Use the latest Chrome, Edge, Firefox or Safari to create encrypted meetings.'} />
         </div>
       </form>
     </Modal>
@@ -520,7 +546,7 @@ function NewMeetingModal({ open, onClose, token, onCreated, fail }) {
 function MeetingReadyModal({ meeting, org, onClose }) {
   const toast = useToast()
   if (!meeting) return null
-  const url = meeting.url || meeting.local_url
+  const url = withKey(meeting.url || meeting.local_url, meeting.e2eeKey)
   const copy = async (text, what) => {
     const ok = await copyText(text)
     toast(ok ? { message: `${what} copied.` } : { kind: 'error', message: 'Could not copy. Select the text and copy it manually.' })
@@ -528,7 +554,7 @@ function MeetingReadyModal({ meeting, org, onClose }) {
   return (
     <Modal open onClose={onClose} title="Meeting created" description={meeting.title}
            footer={<>
-             <Button onClick={() => { window.location.href = `/m/${encodeURIComponent(meeting.room_name)}?host=1` }}
+             <Button onClick={() => { window.location.href = withKey(`/m/${encodeURIComponent(meeting.room_name)}?host=1`, meeting.e2eeKey) }}
                      icon={<DoorIn size={16} />}>Start now</Button>
              <Button variant="primary" icon={<Copy size={16} />}
                      onClick={() => copy(inviteText({ ...meeting, url, org }), 'Invitation')}>Copy invitation</Button>
@@ -554,6 +580,9 @@ function MeetingReadyModal({ meeting, org, onClose }) {
         </dl>
         {meeting.passcode && (
           <Notice kind="warning">Save the passcode now. For security it is not stored in readable form, so it cannot be shown again.</Notice>
+        )}
+        {meeting.e2eeKey && (
+          <Notice kind="info">End-to-end encrypted. The encryption key is the part of the link after “#k=”; it is never sent to the device. Share the whole link, and copy the invitation now: only this browser keeps a copy of the key.</Notice>
         )}
       </div>
     </Modal>

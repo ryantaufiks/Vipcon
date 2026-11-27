@@ -981,6 +981,7 @@ def meeting_info(room: str, db=Depends(get_db)):
         "has_passcode": bool(m.passcode_hash),
         "lobby": bool(m.lobby),
         "locked": bool(m.locked),
+        "e2ee": bool(m.e2ee),  # the key is never here: it is only in the invitation link
     }
 
 
