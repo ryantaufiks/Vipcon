@@ -76,6 +76,14 @@ nav a{text-decoration:none;color:var(--mute)}nav a:hover{color:var(--ink)}
 .dock{position:absolute;z-index:3;right:max(4vw,16px);bottom:28px;display:flex;gap:8px;padding:6px}
 .dock button{min-height:44px;padding:0 16px;border-radius:12px;border:0;background:transparent;color:var(--ink);font:600 14px var(--sans);cursor:pointer;display:flex;align-items:center;gap:8px}
 .dock button:hover,.dock button[aria-pressed=true]{background:rgba(242,179,61,.16);color:var(--gold2)}
+#tour .i-stop,#tour[aria-pressed=true] .i-play{display:none}#tour[aria-pressed=true] .i-stop{display:block}
+/* phones: a centred, icon-only dock; labels stay for screen readers */
+@media(max-width:600px){
+  .stagebox .dock{right:auto;left:50%;width:max-content;transform:translateX(-50%);gap:4px;padding:4px}
+  .dock button{width:48px;min-height:48px;padding:0;justify-content:center}
+  .dock button svg{width:20px;height:20px}
+  .dock button span{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);clip-path:inset(50%);white-space:nowrap}
+}
 .loader{position:absolute;z-index:4;left:50%;top:50%;transform:translate(-50%,-50%);font:600 14px var(--sans);color:var(--mute);letter-spacing:.08em;transition:opacity .5s}
 @media(max-width:900px){
   .hero{height:auto;min-height:0;display:flex;flex-direction:column}
