@@ -207,6 +207,10 @@ export default function PreJoin({ room, signedIn, asHost, onJoined }) {
     }
   }
 
+  // The poll must not restart on every render (the mic level meter re-renders constantly): a restart
+  // would drop an answer that is on its way. enterRef always calls the latest enter().
+  const enterRef = useRef(enter)
+  enterRef.current = enter
   useEffect(() => {
     if (!waiting) return
     let cancelled = false
@@ -214,7 +218,7 @@ export default function PreJoin({ room, signedIn, asHost, onJoined }) {
       try {
         const data = await lobbyStatus(room, name.trim())
         if (cancelled) return
-        if (data.token) enter(data)
+        if (data.token) enterRef.current(data)
         else if (data.status === 'rejected') {
           setWaiting(false)
           setError('The host declined your request to join.')
@@ -224,7 +228,7 @@ export default function PreJoin({ room, signedIn, asHost, onJoined }) {
     poll()
     const t = setInterval(poll, 2000)
     return () => { cancelled = true; clearInterval(t) }
-  }, [waiting, room, name, enter])
+  }, [waiting, room, name])
 
   if (info?.error === 'gone') {
     return (

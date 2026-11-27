@@ -503,6 +503,29 @@ def test_a_host_admits_only_into_their_own_meeting(client, monkeypatch):
     assert "token" in client.get(f"/api/v1/lobby/status?room={theirs['room_name']}&identity=Visitor").json()
 
 
+def test_an_admission_survives_a_lost_poll(client, monkeypatch):
+    """The guest's page may drop a poll's answer (a re-render, a flaky network): the admission must
+    still be there on the next poll, or the guest waits forever."""
+    monkeypatch.setattr(main, "MAX_CONCURRENT_MEETINGS", 100)
+    monkeypatch.setattr(main, "livekit_credentials", lambda: ("devkey", "devsecret"))
+    auth = {"Authorization": f"Bearer {token(client)}"}
+    m = client.post("/api/v1/meetings", json={"title": "Lobby", "lobby": True}, headers=auth).json()
+    status = lambda who: client.get(f"/api/v1/lobby/status?room={m['room_name']}&identity={who}").json()  # noqa: E731
+    for who in ("Guest1", "Guest2"):
+        assert client.post("/api/v1/join", json={"room": m["room_name"], "identity": who}).json()["status"] == "waiting"
+    waiting = client.get(f"/api/v1/meetings/{m['id']}/lobby", headers=auth).json()
+    assert [r["identity"] for r in waiting] == ["Guest1", "Guest2"]
+    g1, g2 = (r["id"] for r in waiting)
+    client.post(f"/api/v1/meetings/{m['id']}/lobby/{g1}/admit", headers=auth)
+    client.post(f"/api/v1/meetings/{m['id']}/lobby/{g2}/reject", headers=auth)
+    assert "token" in status("Guest1") and "token" in status("Guest1")  # asked twice: still admitted
+    assert status("Guest2") == {"status": "rejected"} == status("Guest2")
+    assert client.get(f"/api/v1/meetings/{m['id']}/lobby", headers=auth).json() == []  # host sees only waiting
+    # Turned away, they may ask again: back in the queue.
+    assert client.post("/api/v1/join", json={"room": m["room_name"], "identity": "Guest2"}).json()["status"] == "waiting"
+    assert [r["identity"] for r in client.get(f"/api/v1/meetings/{m['id']}/lobby", headers=auth).json()] == ["Guest2"]
+
+
 # ---------------------------------------------------------------- encrypted backup (keep these last: restore swaps the DB)
 
 

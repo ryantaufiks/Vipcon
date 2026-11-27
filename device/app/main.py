@@ -821,7 +821,7 @@ def list_lobby(meeting_id: int, user=Depends(current_user), db=Depends(get_db)):
     if not m:
         raise HTTPException(404, "not found")
     require_host_or_admin(user, m)
-    reqs = db.query(LobbyRequest).filter_by(room_name=m.room_name).order_by(LobbyRequest.id).all()
+    reqs = db.query(LobbyRequest).filter_by(room_name=m.room_name, status="waiting").order_by(LobbyRequest.id).all()
     return [
         {"id": r.id, "identity": r.identity, "created_at": r.created_at.isoformat() if r.created_at else None}
         for r in reqs
@@ -1004,6 +1004,9 @@ def join(req: JoinRequest, db=Depends(get_db)):
         if not existing:
             db.add(LobbyRequest(room_name=m.room_name, identity=req.identity))
             db.commit()
+        elif existing.status != "waiting":
+            existing.status = "waiting"
+            db.commit()
         return {"status": "waiting"}
     return issue_livekit_token(req.identity, m.room_name, room_admin=False)
 
@@ -1014,13 +1017,8 @@ def lobby_status(room: str, identity: str, db=Depends(get_db)):
     if not lr:
         return {"status": "waiting"}
     if lr.status == "admitted":
-        token = issue_livekit_token(identity, room, room_admin=False)
-        db.delete(lr)
-        db.commit()
-        return token
+        return issue_livekit_token(identity, room, room_admin=False)
     if lr.status == "rejected":
-        db.delete(lr)
-        db.commit()
         return {"status": "rejected"}
     return {"status": "waiting"}
 
