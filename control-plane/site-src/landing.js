@@ -185,7 +185,7 @@ function fly(pos, tgt, ms = 1500) {
 function wide() { return box.clientWidth > 900; }
 function homePos() {
   const p = HOME.pos.clone(), t = HOME.tgt.clone();
-  if (!wide()) p.multiplyScalar(box.clientWidth < 600 ? 1.5 : 1.25);  // leave room for the size labels on phones
+  if (!wide()) p.multiplyScalar(box.clientWidth < 600 ? 1.75 : 1.25);  // leave room for the size labels and caption on phones
   return {p, t};
 }
 function goHome(animate = true) {
@@ -199,7 +199,9 @@ function focus(i) {
   focused = i; controls.autoRotate = false;
   HOT.forEach((x, j) => x.el.classList.toggle('on', j === i));
   capK.textContent = h.k; capT.textContent = h.t; capP.textContent = h.p; cap.classList.add('show');
-  fly(h.cam, h.w);
+  // phones and tablets: stand further back so the feature stays clear of the caption panel below it
+  const k = wide() ? 1 : box.clientWidth < 600 ? 2.6 : 1.4;
+  fly(h.w.clone().add(h.cam.clone().sub(h.w).multiplyScalar(k)), h.w);
 }
 
 // cinematic tour: glide through every detail, then a slow orbit
@@ -233,7 +235,8 @@ function size() {
   const w = box.clientWidth, h = box.clientHeight;
   renderer.setSize(w, h, false); camera.aspect = w / h;
   // on wide screens shift the device into the right part of the frame, clear of the copy
-  if (w > 900) camera.setViewOffset(w, h, -w * 0.18, 0, w, h); else camera.clearViewOffset();
+  // wide: device right of the copy; narrow: lifted so it sits above the caption panel
+  if (w > 900) camera.setViewOffset(w, h, -w * 0.18, 0, w, h); else camera.setViewOffset(w, h, 0, h * (w < 600 ? 0.12 : 0.07), w, h);
   camera.updateProjectionMatrix();
 }
 const ro = new ResizeObserver(() => { size(); if (ready && focused < 0 && !anim) goHome(false); }); ro.observe(box); size();
