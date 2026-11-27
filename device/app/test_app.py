@@ -484,6 +484,25 @@ def test_encrypted_meetings_never_hold_the_key(client, monkeypatch):
     assert client.get(f"/api/v1/meeting-info?room={plain['room_name']}").json()["e2ee"] is False
 
 
+def test_a_host_admits_only_into_their_own_meeting(client, monkeypatch):
+    monkeypatch.setattr(main, "MAX_CONCURRENT_MEETINGS", 100)
+    monkeypatch.setattr(main, "livekit_credentials", lambda: ("devkey", "devsecret"))
+    add_user(client, "lobbyhost1", "host")
+    add_user(client, "lobbyhost2", "host")
+    h1, h2 = sign_in(client, "lobbyhost1"), sign_in(client, "lobbyhost2")
+    mine = client.post("/api/v1/meetings", json={"title": "Mine", "lobby": True}, headers=h1).json()
+    theirs = client.post("/api/v1/meetings", json={"title": "Theirs", "lobby": True}, headers=h2).json()
+    assert client.post("/api/v1/join", json={"room": theirs["room_name"], "identity": "Visitor"}).json()["status"] == "waiting"
+    req = client.get(f"/api/v1/meetings/{theirs['id']}/lobby", headers=h2).json()[0]
+    # Host 1 names their own meeting but host 2's waiting guest: refused, and the guest stays waiting.
+    assert client.post(f"/api/v1/meetings/{mine['id']}/lobby/{req['id']}/admit", headers=h1).status_code == 404
+    assert client.post(f"/api/v1/meetings/{mine['id']}/lobby/{req['id']}/reject", headers=h1).status_code == 200
+    status = client.get(f"/api/v1/lobby/status?room={theirs['room_name']}&identity=Visitor").json()
+    assert status == {"status": "waiting"}
+    assert client.post(f"/api/v1/meetings/{theirs['id']}/lobby/{req['id']}/admit", headers=h2).status_code == 200
+    assert "token" in client.get(f"/api/v1/lobby/status?room={theirs['room_name']}&identity=Visitor").json()
+
+
 # ---------------------------------------------------------------- encrypted backup (keep these last: restore swaps the DB)
 
 

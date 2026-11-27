@@ -834,7 +834,8 @@ def admit_lobby(meeting_id: int, req_id: int, user=Depends(current_user), db=Dep
     if not m:
         raise HTTPException(404, "not found")
     require_host_or_admin(user, m)
-    lr = db.query(LobbyRequest).filter_by(id=req_id).first()
+    # The request must be waiting in this meeting: a host cannot admit someone into another meeting.
+    lr = db.query(LobbyRequest).filter_by(id=req_id, room_name=m.room_name).first()
     if not lr:
         raise HTTPException(404, "request not found")
     lr.status = "admitted"
@@ -848,7 +849,7 @@ def reject_lobby(meeting_id: int, req_id: int, user=Depends(current_user), db=De
     if not m:
         raise HTTPException(404, "not found")
     require_host_or_admin(user, m)
-    lr = db.query(LobbyRequest).filter_by(id=req_id).first()
+    lr = db.query(LobbyRequest).filter_by(id=req_id, room_name=m.room_name).first()
     if lr:
         lr.status = "rejected"
         db.commit()

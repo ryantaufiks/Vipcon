@@ -175,7 +175,7 @@ export default function Room({ session, onLeave }) {
           seenLobby.current.add(r.id)
           playJoin()
           toast({
-            kind: 'info', duration: 0, key: `lobby-${r.id}`, message: `${r.identity} is waiting to join`,
+            kind: 'info', duration: 0, key: `lobby-${session.room}-${r.id}`, message: `${r.identity} is waiting to join`,
             actions: [
               { label: 'Admit', primary: true, onClick: () => admit(r.id) },
               { label: 'View', onClick: () => setPanel('people') },
@@ -186,7 +186,8 @@ export default function Room({ session, onLeave }) {
     }
     load()
     const t = setInterval(load, 3000)
-    return () => { cancelled = true; clearInterval(t) }
+    // Leaving this meeting: its "is waiting to join" notices go too, so none is acted on elsewhere.
+    return () => { cancelled = true; clearInterval(t); toast.clear?.(`lobby-${session.room}-`) }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session])
 

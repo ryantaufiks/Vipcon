@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useId, useRef, useState } from 'react'
+import { createContext, useCallback, useContext, useEffect, useId, useMemo, useRef, useState } from 'react'
 import logoOnDark from './assets/vipcon-logo-light.png'
 import logoOnLight from './assets/vipcon-logo-dark.png'
 import { Sun, Moon, X, Alert, Info, CheckCircle, Eye } from './icons.jsx'
@@ -271,8 +271,12 @@ export function ToastProvider({ children }) {
     if (t.duration !== 0) setTimeout(() => dismiss(id), t.duration || 4000)
     return id
   }, [dismiss])
+  // toast.clear('lobby-…') removes every toast whose key starts with the prefix (e.g. on leaving a room).
+  const api = useMemo(() => Object.assign((t) => toast(t), {
+    clear: (prefix) => setToasts((list) => list.filter((x) => !(x.key || '').startsWith(prefix))),
+  }), [toast])
   return (
-    <ToastContext.Provider value={toast}>
+    <ToastContext.Provider value={api}>
       {children}
       <div className="toasts" aria-live="polite">
         {toasts.map((t) => (
