@@ -551,3 +551,15 @@ details.more ul { list-style: none; display: flex; flex-wrap: wrap; gap: 8px; ma
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; }
 }
+
+/* ---------------------------------------------------------------- account recovery */
+.codes { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.codes li { padding: 10px 12px; border-radius: var(--r); background: var(--surface-2); border: 1px solid var(--border); text-align: center; }
+.codes code { font-family: var(--mono); font-size: 15px; font-weight: 600; letter-spacing: .08em; }
+.kit-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.check-row { display: flex; align-items: center; gap: 10px; font-size: 14px; cursor: pointer; }
+.check-row input { width: 18px; height: 18px; accent-color: var(--brand-text); }
+.sec-head { display: flex; gap: 12px; align-items: flex-start; }
+.sec-head > svg { flex: none; margin-top: 2px; color: var(--brand-text); }
+.sec-title { font-size: 16px; font-weight: 700; margin: 0 0 4px; }
+.link-btn { background: none; border: 0; padding: 0; color: var(--brand-text); font: inherit; font-weight: 600; cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }

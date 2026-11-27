@@ -130,3 +130,25 @@ def test_brand_screen_uses_the_client_logo_or_vipcon(tmp_path):
     a, b = r.screensaver(0.1), r.screensaver(0.6)
     diff = kiosk.np.argwhere(kiosk.np.asarray(a) != kiosk.np.asarray(b))
     assert diff.size and diff[:, 0].min() >= y0 and diff[:, 0].max() < y1  # only the band animates
+
+
+@pytest.mark.parametrize("size", [(480, 320), (320, 480)])
+def test_admin_reset_screen_qr_opens_the_console_reset_page(size):
+    r = kiosk.Renderer(*size)
+    r.set_state(dict(BASE, claimed=True, site_fqdn="client1.lan.xrostr.com", net={}))
+    assert "https://client1.lan.xrostr.com/admin#reset" in decoded(r.reset("40718263", 542))
+    r.reset_hold(3.0)
+    r.reset_done()
+
+
+def test_reset_offer_stores_only_a_hash(tmp_path, monkeypatch):
+    import hashlib
+    import json
+    monkeypatch.setattr(kiosk, "RESET_FILE", str(tmp_path / "admin_reset.json"))
+    code, nonce, expires = kiosk.make_reset_offer()
+    saved = json.loads((tmp_path / "admin_reset.json").read_text())
+    assert len(code) == 8 and code.isdigit() and code not in json.dumps(saved)
+    assert saved["nonce"] == nonce and saved["hash"] == hashlib.sha256((saved["salt"] + code).encode()).hexdigest()
+    assert oct((tmp_path / "admin_reset.json").stat().st_mode & 0o777) == "0o644"
+    kiosk.clear_reset_offer()
+    assert not (tmp_path / "admin_reset.json").exists()

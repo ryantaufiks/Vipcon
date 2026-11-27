@@ -27,9 +27,11 @@ def verify_password(password, stored):
         return False
 
 
-def create_session_token(user_id):
+def create_session_token(user_id, version=0):
+    """version is the user's token_version: changing the password bumps it, ending older sessions."""
     now = int(time.time())
-    return jwt.encode({"sub": str(user_id), "nbf": now, "exp": now + 86400}, SESSION_SECRET, algorithm="HS256")
+    return jwt.encode({"sub": str(user_id), "v": int(version or 0), "nbf": now, "exp": now + 86400},
+                      SESSION_SECRET, algorithm="HS256")
 
 
 def decode_session_token(token):

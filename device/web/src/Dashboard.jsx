@@ -9,8 +9,9 @@ import {
 } from './ui.jsx'
 import {
   Video, People, Plus, Search, More, Copy, LinkIcon, Trash, Stop, Lock, Clock, Calendar, Shield, LogOut,
-  DoorIn, Menu as MenuIcon, UserPlus, Refresh, Monitor,
+  DoorIn, Menu as MenuIcon, UserPlus, Refresh, Monitor, Settings,
 } from './icons.jsx'
+import { ForgotPassword, ChangePasswordModal, ResetUserPasswordModal, SecurityPage, useRecoveryStatus } from './Recovery.jsx'
 import { when, dateParts, duration, nextQuarter, randomPasscode, inviteText, friendly, sessionExpired } from './format.js'
 
 const USERNAME_RE = /^[a-z0-9][a-z0-9._-]{2,31}$/
@@ -19,12 +20,15 @@ const MIN_PASSWORD = 10
 export default function Dashboard() {
   const [token, setToken] = useState(() => getToken())
   if (!token) return <SignIn onSignedIn={setToken} />
-  return <Console token={token} onSignOut={() => { clearAuth(); setToken(null) }} />
+  return <Console token={token} onToken={(t) => { saveAuth(t, getUsername()); setToken(t) }}
+                  onSignOut={() => { clearAuth(); setToken(null) }} />
 }
 
 // ---------------------------------------------------------------- sign in
 
 function SignIn({ onSignedIn }) {
+  // #reset comes from the QR on the device's admin-reset screen.
+  const [forgot, setForgot] = useState(() => (window.location.hash === '#reset' ? 'screen' : null))
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [busy, setBusy] = useState(false)
@@ -50,12 +54,14 @@ function SignIn({ onSignedIn }) {
     }
   }
 
+  const back = () => { setForgot(null); window.history.replaceState(null, '', '/admin') }
   return (
     <div className="public">
       <header className="public-top"><span /><ThemeToggle /></header>
       <main className="public-main">
         <div className="public-card">
           <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 28 }}><Logo large /></div>
+          {forgot ? <ForgotPassword initialMethod={forgot} onBack={back} /> : <>
           <form className="card card-pad form" onSubmit={submit} noValidate>
             <div>
               <h1 className="page-title">Sign in</h1>
@@ -69,8 +75,10 @@ function SignIn({ onSignedIn }) {
             <Button type="submit" variant="primary" size="lg" block loading={busy}>Sign in</Button>
           </form>
           <p className="field-hint" style={{ textAlign: 'center', marginTop: 16 }}>
-            Forgot your password? Ask your Client Admin to reset your account.
+            Forgot your password? Hosts and members: ask a Client Admin.{' '}
+            <button type="button" className="link-btn" onClick={() => setForgot('code')}>Client Admin: reset it here</button>
           </p>
+          </>}
         </div>
       </main>
       <footer className="public-foot">Sign-in is available on the office network only</footer>
@@ -80,9 +88,10 @@ function SignIn({ onSignedIn }) {
 
 // ---------------------------------------------------------------- console shell
 
-function Console({ token, onSignOut }) {
+function Console({ token, onToken, onSignOut }) {
   const toast = useToast()
-  const [page, setPage] = useState(() => (window.location.hash === '#people' ? 'people' : 'meetings'))
+  const [page, setPage] = useState(() => ({ '#people': 'people', '#security': 'security' })[window.location.hash] || 'meetings')
+  const [changingPw, setChangingPw] = useState(false)
   const [navOpen, setNavOpen] = useState(false)
   const [user, setUser] = useState({ username: getUsername(), display_name: '', role: '' })
   const [org, setOrg] = useState('')
@@ -90,6 +99,7 @@ function Console({ token, onSignOut }) {
   const [users, setUsers] = useState(null)
   const [live, setLive] = useState({})
   const isAdmin = user.role === 'admin'
+  const [recovery, reloadRecovery] = useRecoveryStatus(token, isAdmin)
 
   const fail = useCallback((err) => {
     if (sessionExpired(err)) {
@@ -128,7 +138,7 @@ function Console({ token, onSignOut }) {
   function go(p) {
     setPage(p)
     setNavOpen(false)
-    window.history.replaceState(null, '', p === 'people' ? '#people' : '#')
+    window.history.replaceState(null, '', p === 'meetings' ? '#' : `#${p}`)
   }
 
   const name = user.display_name || user.username
@@ -147,6 +157,12 @@ function Console({ token, onSignOut }) {
           <People /> People
         </button>
       )}
+      {isAdmin && (
+        <button className="nav-item" aria-current={page === 'security' ? 'page' : undefined} onClick={() => go('security')}>
+          <Shield /> Security
+          {recovery && recovery.remaining === 0 && <span className="badge badge-dot" style={{ marginLeft: 'auto' }} aria-label="Needs attention" />}
+        </button>
+      )}
       <a className="nav-item" href="/now" target="_blank" rel="noreferrer" style={{ textDecoration: 'none' }}>
         <Monitor /> Room screen list
       </a>
@@ -158,9 +174,14 @@ function Console({ token, onSignOut }) {
           <div className="user-role">{user.role === 'admin' ? 'Client Admin' : user.role || '…'}</div>
         </div>
         <ThemeToggle className="btn btn-ghost btn-sm btn-icon" />
-        <button className="btn btn-ghost btn-sm btn-icon" onClick={onSignOut} title="Sign out" aria-label="Sign out">
-          <LogOut size={16} />
-        </button>
+        <Menu trigger={({ toggle }) => (
+          <button className="btn btn-ghost btn-sm btn-icon" onClick={toggle} title="Account" aria-label="Account">
+            <Settings size={16} />
+          </button>
+        )}>
+          <MenuItem icon={<Lock size={16} />} onClick={() => setChangingPw(true)}>Change password</MenuItem>
+          <MenuItem icon={<LogOut size={16} />} onClick={onSignOut}>Sign out</MenuItem>
+        </Menu>
       </div>
     </aside>
   )
@@ -175,11 +196,23 @@ function Console({ token, onSignOut }) {
           <Logo />
           <ThemeToggle />
         </div>
+        {isAdmin && recovery && recovery.remaining === 0 && page !== 'security' && (
+          <div style={{ padding: '16px 24px 0' }}>
+            <Notice kind="warning">
+              You have no recovery codes. If you forget your password, only a factory reset would get you back in.{' '}
+              <button type="button" className="link-btn" onClick={() => go('security')}>Create a Recovery Kit</button>
+            </Notice>
+          </div>
+        )}
         {page === 'people' && isAdmin
           ? <PeoplePage users={users} me={user} token={token} reload={loadUsers} fail={fail} />
-          : <MeetingsPage meetings={meetings} live={live} token={token} org={org} reload={loadMeetings} fail={fail} isAdmin={isAdmin}
-                          canCreate={isAdmin || user.role === 'host'} />}
+          : page === 'security' && isAdmin
+            ? <SecurityPage token={token} user={user} fail={fail} recovery={recovery} reloadRecovery={reloadRecovery} />
+            : <MeetingsPage meetings={meetings} live={live} token={token} org={org} reload={loadMeetings} fail={fail} isAdmin={isAdmin}
+                            canCreate={isAdmin || user.role === 'host'} />}
       </div>
+      <ChangePasswordModal open={changingPw} onClose={() => setChangingPw(false)} token={token} username={user.username}
+                           onChanged={onToken} />
     </div>
   )
 }
@@ -496,6 +529,7 @@ function MeetingReadyModal({ meeting, org, onClose }) {
 // ---------------------------------------------------------------- people
 
 const ROLES = [
+  { value: 'admin', label: 'Client Admin', description: 'Full control: people, meetings and security. A second admin can reset your password if you ever forget it.' },
   { value: 'host', label: 'Host', description: 'Creates meetings and moderates their own: admits guests, mutes, removes and ends. Joins other hosts’ meetings as staff.' },
   { value: 'member', label: 'Member', description: 'Internal staff. Joins any meeting from the console without a passcode or waiting room; cannot create or moderate meetings.' },
 ]
@@ -504,6 +538,7 @@ function PeoplePage({ users, me: current, token, reload, fail }) {
   const toast = useToast()
   const confirm = useConfirm()
   const [adding, setAdding] = useState(false)
+  const [resetting, setResetting] = useState(null)
   const [query, setQuery] = useState('')
   const shown = (users || []).filter((u) => `${u.display_name} ${u.username}`.toLowerCase().includes(query.trim().toLowerCase()))
 
@@ -563,10 +598,14 @@ function PeoplePage({ users, me: current, token, reload, fail }) {
                   </span>
                 </div>
                 <div className="row-actions">
-                  {u.role !== 'admin' && u.username !== current.username ? (
-                    <Button size="sm" variant="danger-ghost" icon={<Trash size={16} />} onClick={() => remove(u)}>
-                      <span className="hide-sm">Remove</span>
-                    </Button>
+                  {u.username !== current.username ? (
+                    <Menu trigger={({ toggle }) => (
+                      <Button size="sm" variant="ghost" icon={<More />} onClick={toggle} aria-label={`Actions for ${u.display_name || u.username}`} />
+                    )}>
+                      <MenuItem icon={<Lock size={16} />} onClick={() => setResetting(u)}>Reset password</MenuItem>
+                      {u.role !== 'admin' && <div className="menu-sep" />}
+                      {u.role !== 'admin' && <MenuItem icon={<Trash size={16} />} danger onClick={() => remove(u)}>Remove</MenuItem>}
+                    </Menu>
                   ) : <span style={{ width: 32 }} />}
                 </div>
               </div>
@@ -574,6 +613,7 @@ function PeoplePage({ users, me: current, token, reload, fail }) {
           </div>
         )}
       </div>
+      <ResetUserPasswordModal user={resetting} onClose={() => setResetting(null)} token={token} fail={fail} />
       <AddUserModal open={adding} onClose={() => setAdding(false)} token={token} fail={fail}
                     onAdded={(u) => { setAdding(false); toast({ message: `${u} can now sign in.` }); reload() }} />
     </div>

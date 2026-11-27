@@ -9,6 +9,9 @@ does exactly one job:
                 claimed device   -> QR to the local meeting address + client name
                 inactive license -> "contact your administrator"
     60 s idle   back to the screensaver
+    hold 8 s    claimed device -> a one-time code to reset a Client Admin password from the
+                console on the office network (proof that someone is at the device); the code is
+                valid 10 minutes, a tap cancels it, and the admin can switch this off
 
 It draws straight to the framebuffer and reads the touch panel with evdev: no X, no
 browser, no shell, nothing to escape to. It never opens a network connection except
@@ -28,6 +31,7 @@ import math
 import os
 import random
 import re
+import secrets
 import select
 import signal
 import socket
@@ -54,6 +58,10 @@ SPLASH_FILE = os.environ.get("KIOSK_SPLASH_FILE", "/var/cache/vipcon-kiosk/splas
 NETSETUP_STATE = os.environ.get("KIOSK_NETSETUP_STATE", "/run/vipcon-netsetup/state.json")
 CONNECTED_NOTICE = 20  # seconds the "Online" screen stays up after Wi-Fi setup succeeds
 FULL_REPAINT = 3  # seconds
+# Admin password reset from the screen: read by the device app (as a hash; the code is only shown).
+RESET_FILE = os.path.join(KIOSK_DIR, "admin_reset.json")
+RESET_HOLD = float(os.environ.get("KIOSK_RESET_HOLD", "8"))  # seconds of pressing the screen
+RESET_TTL = 600  # seconds the code stays valid
 
 BG = (6, 8, 12)
 FG = (236, 240, 245)
@@ -89,13 +97,42 @@ def lan_ip():
         return ""
 
 
-def local_claimed():
-    """The device app is the source of truth for "has a Client Admin"; None if unreachable."""
+def local_health():
+    """The device app's /healthz (claimed, screen reset switch); None if unreachable."""
     try:
         with urllib.request.urlopen(HEALTH_URL, timeout=2) as r:
-            return bool(json.load(r).get("claimed"))
+            return json.load(r)
     except Exception:
         return None
+
+
+def local_claimed():
+    """The device app is the source of truth for "has a Client Admin"; None if unreachable."""
+    health = local_health()
+    return None if health is None else bool(health.get("claimed"))
+
+
+def make_reset_offer():
+    """A fresh 8-digit admin reset code. Only its salted hash goes to disk for the device app;
+    the code itself exists on the screen alone. Returns (code, nonce, expires_at)."""
+    code = f"{secrets.randbelow(10 ** 8):08d}"
+    nonce, salt = secrets.token_hex(8), secrets.token_hex(8)
+    expires = time.time() + RESET_TTL
+    offer = {"nonce": nonce, "salt": salt, "expires_at": expires,
+             "hash": hashlib.sha256((salt + code).encode()).hexdigest()}
+    tmp = RESET_FILE + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(offer, f)
+    os.chmod(tmp, 0o644)
+    os.replace(tmp, RESET_FILE)
+    return code, nonce, expires
+
+
+def clear_reset_offer():
+    try:
+        os.remove(RESET_FILE)
+    except OSError:
+        pass
 
 
 def live_meetings():
@@ -133,7 +170,8 @@ def load_state():
         remote = json.loads(read(os.path.join(KIOSK_DIR, "state.json"), "{}") or "{}")
     except ValueError:
         remote = {}
-    claimed = local_claimed()
+    health = local_health()
+    claimed = None if health is None else bool(health.get("claimed"))
     if claimed is None:
         claimed = bool(remote.get("claimed"))
     logo_path = os.path.join(KIOSK_DIR, "logo.png")
@@ -149,6 +187,8 @@ def load_state():
         "room_key": room_key(read(os.path.join(ETC, "room_seed"))),
         "claim_code": read(os.path.join(ETC, "claim_code")),
         "claimed": claimed,
+        # Only offered while the device app answers and has the switch on.
+        "screen_reset": bool(health and health.get("screen_reset", True)),
         "license_status": remote.get("license_status"),
         "client_name": remote.get("client_name"),
         "tagline": (remote.get("tagline") or "").strip()[:40],
@@ -657,6 +697,26 @@ class Renderer:
         meta = [f"https://{st['lan_ip']}/now"] if st["lan_ip"] else []
         return self._panel("Ready", GREEN, "Vipcon is ready", body, remaining, qr_text=now_link(st), meta=meta)
 
+    def reset_hold(self, held):
+        """While the screen is pressed: feedback that keeping the finger down does something."""
+        left = max(0, int(math.ceil(RESET_HOLD - held)))
+        return self._panel("Admin reset", WARN, "Keep holding…",
+                           [(f"Hold for {left} more second{'s' if left != 1 else ''} to show a code that resets"
+                             " a Client Admin password.", mix(FG, 0.9)),
+                            ("Let go to cancel.", MUTED)], None)
+
+    def reset(self, code, seconds_left):
+        """The one-time admin reset code, with a QR to the console's reset page."""
+        mins, secs = divmod(max(0, int(seconds_left)), 60)
+        return self._panel("Admin reset", WARN, f"{code[:4]} {code[4:]}",
+                           [("Scan, or open the console: Forgot password → Device screen.", mix(FG, 0.9))],
+                           None, qr_text=local_link(self.state) + "/admin#reset",
+                           meta=[f"Valid {mins}:{secs:02d}", "Tap to cancel"], title_color=WARN)
+
+    def reset_done(self):
+        return self._panel("Admin reset", GREEN, "Password changed",
+                           [("The Client Admin can now sign in with the new password.", FG)], None)
+
 
 # ---------------------------------------------------------------- hardware
 
@@ -715,6 +775,11 @@ class Touch:
         self.evdev = evdev
         self.dev = None
         self.next_scan = 0
+        self.down_at = None  # while a finger is on the panel: when it touched down
+
+    def held(self):
+        """Seconds the current press has lasted (0 when nothing touches the panel)."""
+        return time.time() - self.down_at if self.down_at else 0.0
 
     def _scan(self):
         if time.time() < self.next_scan:
@@ -748,11 +813,16 @@ class Touch:
                 return False
             tapped = False
             for ev in self.dev.read():
-                if ev.type == self.evdev.ecodes.EV_KEY and ev.code == self.evdev.ecodes.BTN_TOUCH and ev.value == 1:
-                    tapped = True
+                if ev.type == self.evdev.ecodes.EV_KEY and ev.code == self.evdev.ecodes.BTN_TOUCH:
+                    if ev.value == 1:
+                        tapped = True
+                        self.down_at = time.time()
+                    elif ev.value == 0:
+                        self.down_at = None
             return tapped
         except OSError:  # panel went away (driver reload); rescan later
             self.dev = None
+            self.down_at = None
             return False
 
 
@@ -803,6 +873,11 @@ def run():
     splash_key = None
     net_shown = None
     detail_shown = None
+    holding = False
+    code = nonce = None
+    expires = next_check = done_until = 0
+    reset_shown = None
+    clear_reset_offer()  # a code from before a restart is never shown again, so drop it
     i = 0
     try:
         while True:
@@ -821,6 +896,27 @@ def run():
                 mode, frames_key = "saver", None
                 continue
             net_shown = None
+            # Press and hold (any screen but the reset code itself): admin password reset.
+            held = touch.held()
+            if mode not in ("reset", "reset_done") and held >= 1.5 \
+                    and renderer.state.get("claimed") and renderer.state.get("screen_reset"):
+                if held >= RESET_HOLD:
+                    touch.down_at = None
+                    try:
+                        code, nonce, expires = make_reset_offer()
+                        mode, reset_shown, next_check = "reset", None, 0
+                    except OSError as e:
+                        print(f"kiosk: cannot write the reset code: {e}", flush=True)
+                        mode, frames_key = "saver", None
+                    holding = False
+                else:
+                    fb.show(fb.encode(renderer.reset_hold(held)))
+                    holding = True
+                    touch.wait(0.25)
+                continue
+            if holding:  # let go before the end: back to the screensaver
+                holding, mode, frames_key = False, "saver", None
+                continue
             if mode == "saver":
                 key = renderer.cache.get("key")
                 if key != frames_key:
@@ -841,14 +937,42 @@ def run():
                     mode, mode_since, detail_shown = "detail", time.time(), None
                     renderer.set_state(load_state())
                     last_poll = time.time()
-            else:
+            elif mode == "detail":
                 remaining = max(0, IDLE_TIMEOUT - int(time.time() - mode_since))
                 if remaining != detail_shown:
                     fb.show(fb.encode(renderer.detail(remaining)))
                     detail_shown = remaining
                 if remaining == 0 or touch.wait(0.5):
                     mode, frames_key = "saver", None
+            elif mode == "reset":
+                left = expires - time.time()
+                if time.time() >= next_check:  # spent (password changed) or switched off meanwhile?
+                    next_check = time.time() + 2
+                    health = local_health() or {}
+                    if health.get("screen_reset_used") == nonce:
+                        clear_reset_offer()
+                        fb.show(fb.encode(renderer.reset_done()))
+                        mode, done_until = "reset_done", time.time() + 8
+                        continue
+                    if health.get("screen_reset") is False:
+                        left = 0
+                if left <= 0:
+                    clear_reset_offer()
+                    mode, frames_key = "saver", None
+                    continue
+                if int(left) != reset_shown:
+                    fb.show(fb.encode(renderer.reset(code, left)))
+                    reset_shown = int(left)
+                if touch.wait(0.5):  # a tap cancels the code
+                    touch.down_at = None
+                    clear_reset_offer()
+                    mode, frames_key = "saver", None
+            else:  # reset_done
+                if time.time() >= done_until or touch.wait(0.5):
+                    touch.down_at = None
+                    mode, frames_key = "saver", None
     finally:
+        clear_reset_offer()
         if renderer.state is not None:
             try:
                 fb.show(fb.encode(renderer.splash("Please wait…")))
@@ -890,6 +1014,13 @@ def preview(out_dir, width, height):
             path = os.path.join(out_dir, f"{width}x{height}-{name}{'-' + str(n) if len(imgs) > 1 else ''}.png")
             img.save(path)
             print(path)
+    r = Renderer(width, height)
+    r.set_state(dict(base, claimed=True, license_status="active", site_fqdn="client1.lan.xrostr.com"))
+    for name, img in (("reset-hold", r.reset_hold(4.2)), ("reset-code", r.reset("40718263", 542)),
+                      ("reset-done", r.reset_done())):
+        path = os.path.join(out_dir, f"{width}x{height}-{name}.png")
+        img.save(path)
+        print(path)
 
 
 if __name__ == "__main__":
