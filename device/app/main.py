@@ -8,6 +8,7 @@ import secrets
 import threading
 import time
 from datetime import datetime, timedelta, timezone
+from typing import Optional
 
 import jwt
 import requests
@@ -24,7 +25,11 @@ from security import (
     decode_session_token,
     hash_password,
     livekit_credentials,
+    new_totp_secret,
+    qr_svg,
+    totp_uri,
     verify_password,
+    verify_totp,
 )
 
 DATABASE_URL = os.environ.get("DATABASE_URL", "sqlite:////data/app.db")
@@ -64,6 +69,9 @@ ADDED_COLUMNS = [  # (table, column, SQL type and default), in the order they we
     ("org_settings", "screen_reset_used", "VARCHAR"),
     ("local_audit", "detail", "VARCHAR"),
     ("org_settings", "session_epoch", "VARCHAR"),
+    ("users", "totp_pending", "VARCHAR"),
+    ("users", "totp_last_step", "INTEGER DEFAULT 0"),
+    ("org_settings", "require_2fa", "BOOLEAN DEFAULT 0"),
 ]
 
 
@@ -86,7 +94,16 @@ def require_host_or_admin(user, m):
         raise HTTPException(403, "host only")
 
 
-def current_user(authorization: str = Header(None), db=Depends(get_db)):
+# What an admin or host may still do while the policy requires two-factor and they have not set it up.
+ENROLL_PATHS = {"/api/v1/me", "/api/v1/me/2fa/setup", "/api/v1/me/2fa/enable", "/api/v1/me/password"}
+
+
+def needs_2fa_enrollment(user, db):
+    s = db.query(OrgSettings).first()
+    return bool(s and s.require_2fa) and user.role in ("admin", "host") and not user.totp_secret
+
+
+def current_user(request: Request, authorization: str = Header(None), db=Depends(get_db)):
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(401, "missing token")
     try:
@@ -100,6 +117,8 @@ def current_user(authorization: str = Header(None), db=Depends(get_db)):
         raise HTTPException(401, "invalid token")
     if payload.get("e", "") != session_epoch(db):  # the data was restored from a backup since
         raise HTTPException(401, "invalid token")
+    if request.url.path not in ENROLL_PATHS and needs_2fa_enrollment(user, db):
+        raise HTTPException(403, "2fa enrollment required")
     return user
 
 
@@ -200,6 +219,7 @@ _claim_lock = threading.Lock()
 class LoginRequest(BaseModel):
     username: str
     password: str
+    totp: Optional[str] = None
 
 
 class UserCreate(BaseModel):
@@ -211,8 +231,8 @@ class UserCreate(BaseModel):
 
 class MeetingCreate(BaseModel):
     title: str
-    scheduled_at: str = None
-    passcode: str = None
+    scheduled_at: Optional[str] = None
+    passcode: Optional[str] = None
     lobby: bool = True
     e2ee: bool = False
     max_participants: int = 10
@@ -223,7 +243,7 @@ class MeetingCreate(BaseModel):
 class JoinRequest(BaseModel):
     room: str
     identity: str
-    passcode: str = None
+    passcode: Optional[str] = None
 
 
 class HostTokenRequest(BaseModel):
@@ -241,10 +261,11 @@ class MuteRequest(BaseModel):
 
 
 class SettingsRequest(BaseModel):
-    org_name: str = None
-    logo_path: str = None
-    theme: dict = None
-    screen_reset: bool = None
+    org_name: Optional[str] = None
+    logo_path: Optional[str] = None
+    theme: Optional[dict] = None
+    screen_reset: Optional[bool] = None
+    require_2fa: Optional[bool] = None
 
 
 @app.get("/healthz")
@@ -371,22 +392,41 @@ def login(req: LoginRequest, db=Depends(get_db)):
             user.failed_attempts = 0
         db.commit()
         raise HTTPException(401, "invalid credentials")
+    if user.totp_secret:
+        if not req.totp:
+            raise HTTPException(401, "totp required")  # the password was right: ask for the code
+        step = verify_totp(user.totp_secret, req.totp, user.totp_last_step)
+        if step is None:
+            fail_login(user)
+            db.commit()
+            raise HTTPException(401, "invalid totp")
+        user.totp_last_step = step
     user.failed_attempts = 0
     user.last_login = datetime.now(timezone.utc)
     db.commit()
-    return {"token": session_token(user, db), "user": {"id": user.id, "username": user.username, "role": user.role}}
+    return {"token": session_token(user, db), "must_enroll_2fa": needs_2fa_enrollment(user, db),
+            "user": {"id": user.id, "username": user.username, "role": user.role}}
+
+
+def fail_login(user):
+    user.failed_attempts = (user.failed_attempts or 0) + 1
+    if user.failed_attempts >= 5:
+        user.locked_until = datetime.now(timezone.utc) + timedelta(minutes=15)
+        user.failed_attempts = 0
 
 
 @app.get("/api/v1/me")
-def me(user=Depends(current_user)):
-    return {"id": user.id, "username": user.username, "display_name": user.display_name, "role": user.role}
+def me(user=Depends(current_user), db=Depends(get_db)):
+    return {"id": user.id, "username": user.username, "display_name": user.display_name, "role": user.role,
+            "totp_enabled": bool(user.totp_secret), "must_enroll_2fa": needs_2fa_enrollment(user, db)}
 
 
 @app.get("/api/v1/users")
 def list_users(user=Depends(current_user), db=Depends(get_db)):
     require_admin(user)
     return [
-        {"id": u.id, "username": u.username, "display_name": u.display_name, "role": u.role, "active": u.active}
+        {"id": u.id, "username": u.username, "display_name": u.display_name, "role": u.role, "active": u.active,
+         "totp_enabled": bool(u.totp_secret)}
         for u in db.query(User).all()
     ]
 
@@ -621,7 +661,9 @@ def recovery_reset(req: RecoveryReset, request: Request, db=Depends(get_db)):
     check_new_password(username, req.new_password)
     match.used_at = datetime.now(timezone.utc)
     set_password(user, req.new_password)
-    audit(db, user, "password.reset.recovery_code", f"{recovery_remaining(db, user)} codes left")
+    had_2fa = clear_2fa(user)
+    audit(db, user, "password.reset.recovery_code",
+          f"{recovery_remaining(db, user)} codes left" + ("; two-factor turned off" if had_2fa else ""))
     db.commit()
     RECOVERY_LIMIT.clear(username)
     return {"ok": True, "remaining": recovery_remaining(db, user)}
@@ -672,7 +714,8 @@ def screen_reset(req: ScreenReset, request: Request, db=Depends(get_db)):
     settings.screen_reset_used = nonce
     db.add(settings)
     set_password(user, req.new_password)
-    audit(db, user, "password.reset.device_screen")
+    had_2fa = clear_2fa(user)
+    audit(db, user, "password.reset.device_screen", "two-factor turned off" if had_2fa else None)
     db.commit()
     return {"ok": True}
 
@@ -1023,8 +1066,9 @@ def issue_livekit_token(identity, room, room_admin):
 def get_settings(user=Depends(current_user), db=Depends(get_db)):
     s = db.query(OrgSettings).first()
     if not s:
-        return {"org_name": "", "logo_path": "", "theme": {}, "screen_reset": True}
-    return {"org_name": s.org_name, "logo_path": s.logo_path, "theme": s.theme, "screen_reset": s.screen_reset is not False}
+        return {"org_name": "", "logo_path": "", "theme": {}, "screen_reset": True, "require_2fa": False}
+    return {"org_name": s.org_name, "logo_path": s.logo_path, "theme": s.theme, "screen_reset": s.screen_reset is not False,
+            "require_2fa": bool(s.require_2fa)}
 
 
 @app.post("/api/v1/settings")
@@ -1040,6 +1084,9 @@ def set_settings(req: SettingsRequest, user=Depends(current_user), db=Depends(ge
         s.logo_path = req.logo_path
     if req.theme is not None:
         s.theme = req.theme
+    if req.require_2fa is not None and req.require_2fa != bool(s.require_2fa):
+        s.require_2fa = req.require_2fa
+        audit(db, user, "2fa.required" if req.require_2fa else "2fa.not_required")
     if req.screen_reset is not None and req.screen_reset != (s.screen_reset is not False):
         s.screen_reset = req.screen_reset
         audit(db, user, "screen_reset.enabled" if req.screen_reset else "screen_reset.disabled")
@@ -1166,3 +1213,80 @@ def backup_restore(req: BackupRestore, user=Depends(current_user), db=Depends(ge
         # Carry on backing up the restored data to the same place, with the same key.
         backup.save_state({"enabled": True, "locator": locator, "key": base64.b64encode(key).decode()})
     return {"ok": True, "admins": admins}
+
+
+
+# ---------------------------------------------------------------- two-factor sign-in (TOTP)
+
+
+class TotpCode(BaseModel):
+    code: str
+
+
+class TotpDisable(BaseModel):
+    password: str
+    code: str
+
+
+def clear_2fa(user):
+    had = bool(user.totp_secret)
+    user.totp_secret = user.totp_pending = None
+    user.totp_last_step = 0
+    return had
+
+
+@app.post("/api/v1/me/2fa/setup")
+def totp_setup(user=Depends(current_user), db=Depends(get_db)):
+    """A new secret to scan; it only takes effect once a code from it is confirmed."""
+    if user.totp_secret:
+        raise HTTPException(409, "2fa already on")
+    user.totp_pending = new_totp_secret()
+    db.commit()
+    uri = totp_uri(user.totp_pending, user.username)
+    return {"secret": user.totp_pending, "uri": uri, "qr_svg": qr_svg(uri)}
+
+
+@app.post("/api/v1/me/2fa/enable")
+def totp_enable(req: TotpCode, user=Depends(current_user), db=Depends(get_db)):
+    if not user.totp_pending:
+        raise HTTPException(409, "start two-factor setup first")
+    step = verify_totp(user.totp_pending, req.code)
+    if step is None:
+        raise HTTPException(401, "invalid totp")
+    user.totp_secret, user.totp_pending, user.totp_last_step = user.totp_pending, None, step
+    audit(db, user, "2fa.enabled")
+    db.commit()
+    return {"ok": True}
+
+
+@app.post("/api/v1/me/2fa/disable")
+def totp_disable(req: TotpDisable, user=Depends(current_user), db=Depends(get_db)):
+    if not user.totp_secret:
+        raise HTTPException(409, "2fa is off")
+    s = db.query(OrgSettings).first()
+    if s and s.require_2fa and user.role in ("admin", "host"):
+        raise HTTPException(403, "2fa required by policy")
+    if not verify_password(req.password, user.password_hash):
+        raise HTTPException(401, "current password incorrect")
+    if verify_totp(user.totp_secret, req.code, user.totp_last_step) is None:
+        raise HTTPException(401, "invalid totp")
+    clear_2fa(user)
+    audit(db, user, "2fa.disabled")
+    db.commit()
+    return {"ok": True}
+
+
+@app.post("/api/v1/users/{user_id}/2fa/reset")
+def totp_reset_for(user_id: int, user=Depends(current_user), db=Depends(get_db)):
+    """Someone lost their phone: a Client Admin switches their two-factor off (they set it up again)."""
+    require_admin(user)
+    if user_id == user.id:
+        raise HTTPException(400, "use your own two-factor settings")
+    u = db.query(User).filter_by(id=user_id).first()
+    if not u:
+        raise HTTPException(404, "not found")
+    clear_2fa(u)
+    u.token_version = (u.token_version or 0) + 1  # their sessions end too
+    audit(db, user, "2fa.reset_by_admin", u.username)
+    db.commit()
+    return {"ok": True}

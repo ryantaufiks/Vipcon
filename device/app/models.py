@@ -25,6 +25,10 @@ class User(Base):
     last_login = Column(DateTime, nullable=True)
     # Bumped whenever the password changes: sessions carry it, so older ones stop working.
     token_version = Column(Integer, default=0)
+    # Two-factor: totp_secret once switched on; totp_pending while the user is setting it up;
+    # totp_last_step is the last code's time step, so no code works twice.
+    totp_pending = Column(String, nullable=True)
+    totp_last_step = Column(Integer, default=0)
 
 
 class RecoveryCode(Base):
@@ -87,6 +91,8 @@ class OrgSettings(Base):
     screen_reset_used = Column(String, nullable=True)  # nonce of the last screen code spent
     # Part of every session token; a restore from backup sets a new one, ending every session.
     session_epoch = Column(String, nullable=True)
+    # Admins and hosts must switch on two-factor before they can use the console.
+    require_2fa = Column(Boolean, default=False)
 
 
 class LicenseState(Base):

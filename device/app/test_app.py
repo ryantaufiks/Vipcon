@@ -369,6 +369,110 @@ def test_device_screen_code_resets_an_admin_password(client, tmp_path, monkeypat
 
 
 
+# ---------------------------------------------------------------- two-factor sign-in
+
+
+def totp_code(secret, offset=0):
+    import time as _time
+    from security import totp_at
+    return totp_at(secret, int(_time.time() // 30) + offset)
+
+
+def enroll_2fa(client, auth):
+    r = client.post("/api/v1/me/2fa/setup", headers=auth)
+    assert r.status_code == 200, r.text
+    secret = r.json()["secret"]
+    assert r.json()["uri"].startswith("otpauth://totp/VIPCON:") and "<svg" in r.json()["qr_svg"]
+    assert client.post("/api/v1/me/2fa/enable", json={"code": "000000"}, headers=auth).status_code == 401
+    assert client.post("/api/v1/me/2fa/enable", json={"code": totp_code(secret)}, headers=auth).status_code == 200
+    return secret
+
+
+def test_two_factor_sign_in(client):
+    add_user(client, "twofa", "host")
+    auth = sign_in(client, "twofa")
+    assert client.get("/api/v1/me", headers=auth).json()["totp_enabled"] is False
+    secret = enroll_2fa(client, auth)
+    assert client.get("/api/v1/me", headers=auth).json()["totp_enabled"] is True
+    assert client.post("/api/v1/me/2fa/setup", headers=auth).status_code == 409
+
+    login = lambda **kw: client.post("/api/v1/login", json={"username": "twofa", "password": "twofa-password-1", **kw})  # noqa: E731
+    r = login()
+    assert r.status_code == 401 and r.json()["detail"] == "totp required"
+    assert login(totp="123456").json()["detail"] == "invalid totp"
+    assert login(totp=totp_code(secret, 1)).status_code == 200
+    assert login(totp=totp_code(secret, 1)).status_code == 401  # the same code never works twice
+    assert login(totp=totp_code(secret, 0)).status_code == 401  # nor an older one
+    assert login(password="wrong-password", totp=totp_code(secret, 1)).json()["detail"] == "invalid credentials"
+
+    # Lost phone: a Client Admin switches it off, and their sessions end.
+    admin = {"Authorization": f"Bearer {token(client)}"}
+    uid = next(u["id"] for u in client.get("/api/v1/users", headers=admin).json() if u["username"] == "twofa")
+    assert next(u for u in client.get("/api/v1/users", headers=admin).json() if u["id"] == uid)["totp_enabled"] is True
+    assert client.post(f"/api/v1/users/{uid}/2fa/reset", headers=admin).status_code == 200
+    assert login().status_code == 200
+
+
+def test_policy_requires_two_factor_for_admins_and_hosts(client):
+    add_user(client, "policyhost", "host")
+    add_user(client, "policymember", "member")
+    admin_user = "policyadmin"
+    add_user(client, admin_user, "admin")
+    admin = sign_in(client, admin_user)
+    enroll_2fa(client, admin)
+    assert client.post("/api/v1/settings", json={"require_2fa": True}, headers=admin).status_code == 200
+    try:
+        r = client.post("/api/v1/login", json={"username": "policyhost", "password": "policyhost-password-1"})
+        assert r.status_code == 200 and r.json()["must_enroll_2fa"] is True
+        host = {"Authorization": "Bearer " + r.json()["token"]}
+        assert client.get("/api/v1/meetings", headers=host).json()["detail"] == "2fa enrollment required"
+        assert client.get("/api/v1/me", headers=host).json()["must_enroll_2fa"] is True
+        secret = enroll_2fa(client, host)
+        assert client.get("/api/v1/meetings", headers=host).status_code == 200
+        # Under the policy a host cannot switch it off again; members are not affected.
+        r = client.post("/api/v1/me/2fa/disable", json={"password": "policyhost-password-1", "code": totp_code(secret, 1)},
+                        headers=host)
+        assert r.status_code == 403
+        member = sign_in(client, "policymember")
+        assert client.get("/api/v1/meetings", headers=member).status_code == 200
+        msecret = enroll_2fa(client, member)
+        r = client.post("/api/v1/me/2fa/disable", json={"password": "policymember-password-1", "code": totp_code(msecret, 1)},
+                        headers=member)
+        assert r.status_code == 200
+    finally:
+        client.post("/api/v1/settings", json={"require_2fa": False}, headers=admin)
+    events = [e["action"] for e in client.get("/api/v1/security/events", headers=admin).json()]
+    assert "2fa.required" in events and "2fa.enabled" in events and "2fa.disabled" in events
+
+
+def test_recovery_code_reset_turns_two_factor_off(client):
+    main.RECOVERY_LIMIT.hits.clear()
+    main.RECOVERY_LIMIT_ALL.hits.clear()
+    add_user(client, "lostphone", "admin")
+    auth = sign_in(client, "lostphone")
+    enroll_2fa(client, auth)
+    codes = client.post("/api/v1/me/recovery-codes", json={"password": "lostphone-password-1"}, headers=auth).json()["codes"]
+    r = client.post("/api/v1/recovery/reset", json={"username": "lostphone", "code": codes[0], "new_password": "found-it-again-1"})
+    assert r.status_code == 200
+    assert client.post("/api/v1/login", json={"username": "lostphone", "password": "found-it-again-1"}).status_code == 200
+
+
+def test_optional_fields_accept_null_as_the_web_app_sends_them(client, monkeypatch):
+    """The web app sends null for "no passcode" / "no time" / "no code"; that must not be a 422."""
+    monkeypatch.setattr(main, "MAX_CONCURRENT_MEETINGS", 100)
+    auth = {"Authorization": f"Bearer {token(client)}"}
+    m = client.post("/api/v1/meetings", json={"title": "Open meeting", "passcode": None, "scheduled_at": None,
+                                              "lobby": False}, headers=auth)
+    assert m.status_code == 200, m.text
+    assert m.json()["has_passcode"] is False and m.json()["scheduled_at"] is None
+    monkeypatch.setattr(main, "livekit_credentials", lambda: ("devkey", "devsecret"))
+    r = client.post("/api/v1/join", json={"room": m.json()["room_name"], "identity": "Guest", "passcode": None})
+    assert r.status_code == 200, r.text
+    r = client.post("/api/v1/login", json={"username": "host", "password": "host-password-1", "totp": None})
+    assert r.status_code == 200, r.text
+    assert client.post("/api/v1/settings", json={"org_name": None, "screen_reset": None}, headers=auth).status_code == 200
+
+
 # ---------------------------------------------------------------- encrypted backup (keep these last: restore swaps the DB)
 
 

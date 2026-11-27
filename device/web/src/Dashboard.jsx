@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   login, createMeeting, listMeetings, endMeeting, deleteMeeting, listUsers, createUser, deleteUser,
-  saveAuth, getToken, clearAuth, getUsername, me, getSettings, meetingsNow,
+  saveAuth, getToken, clearAuth, getUsername, me, getSettings, meetingsNow, resetUser2fa,
 } from './api.js'
 import {
   Logo, ThemeToggle, Button, TextInput, PasswordInput, Field, Switch, Choice, Notice, Avatar, EmptyState,
@@ -12,6 +12,7 @@ import {
   DoorIn, Menu as MenuIcon, UserPlus, Refresh, Monitor, Settings,
 } from './icons.jsx'
 import { ForgotPassword, ChangePasswordModal, ResetUserPasswordModal, SecurityPage, useRecoveryStatus } from './Recovery.jsx'
+import { TwoFactorModal, TwoFactorGate } from './TwoFactor.jsx'
 import { when, dateParts, duration, nextQuarter, randomPasscode, inviteText, friendly, sessionExpired } from './format.js'
 
 const USERNAME_RE = /^[a-z0-9][a-z0-9._-]{2,31}$/
@@ -31,6 +32,8 @@ function SignIn({ onSignedIn }) {
   const [forgot, setForgot] = useState(() => (window.location.hash === '#reset' ? 'screen' : null))
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
+  const [code, setCode] = useState('')
+  const [needCode, setNeedCode] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
 
@@ -40,15 +43,24 @@ function SignIn({ onSignedIn }) {
       setError('Enter your username and password.')
       return
     }
+    if (needCode && code.replace(/\D/g, '').length !== 6) {
+      setError('Enter the 6-digit code from your authenticator app.')
+      return
+    }
     setBusy(true)
     setError('')
     try {
-      const d = await login(username.trim().toLowerCase(), password)
+      const d = await login(username.trim().toLowerCase(), password, needCode ? code : null)
       saveAuth(d.token, d.user.username)
       onSignedIn(d.token)
     } catch (err) {
-      setError(friendly(err))
-      setPassword('')
+      if (err.message === 'totp required') {
+        setNeedCode(true)
+      } else {
+        setError(friendly(err))
+        if (needCode) setCode('')
+        else setPassword('')
+      }
     } finally {
       setBusy(false)
     }
@@ -70,9 +82,15 @@ function SignIn({ onSignedIn }) {
             <TextInput label="Username" value={username} onChange={(e) => setUsername(e.target.value)} autoFocus
                        autoComplete="username" autoCapitalize="none" spellCheck={false} />
             <PasswordInput label="Password" value={password} onChange={(e) => setPassword(e.target.value)}
-                           autoComplete="current-password" />
+                           autoComplete="current-password" disabled={needCode} />
+            {needCode && (
+              <TextInput label="Code from your authenticator app" value={code} autoFocus
+                         onChange={(e) => setCode(e.target.value.replace(/[^\d ]/g, '').slice(0, 7))}
+                         inputMode="numeric" autoComplete="one-time-code" placeholder="123 456" className="input-mono"
+                         hint="Lost your phone? A Client Admin can reset two-factor for you; admins can use a Recovery Kit code." />
+            )}
             {error && <Notice kind="error">{error}</Notice>}
-            <Button type="submit" variant="primary" size="lg" block loading={busy}>Sign in</Button>
+            <Button type="submit" variant="primary" size="lg" block loading={busy}>{needCode ? 'Verify' : 'Sign in'}</Button>
           </form>
           <p className="field-hint" style={{ textAlign: 'center', marginTop: 16 }}>
             Forgot your password? Hosts and members: ask a Client Admin.{' '}
@@ -92,6 +110,7 @@ function Console({ token, onToken, onSignOut }) {
   const toast = useToast()
   const [page, setPage] = useState(() => ({ '#people': 'people', '#security': 'security' })[window.location.hash] || 'meetings')
   const [changingPw, setChangingPw] = useState(false)
+  const [twoFactor, setTwoFactor] = useState(false)
   const [navOpen, setNavOpen] = useState(false)
   const [user, setUser] = useState({ username: getUsername(), display_name: '', role: '' })
   const [org, setOrg] = useState('')
@@ -104,6 +123,10 @@ function Console({ token, onToken, onSignOut }) {
   const fail = useCallback((err) => {
     if (sessionExpired(err)) {
       onSignOut()
+      return
+    }
+    if (err?.message === '2fa enrollment required') {
+      setUser((u) => ({ ...u, must_enroll_2fa: true }))
       return
     }
     toast({ kind: 'error', message: friendly(err) })
@@ -139,6 +162,11 @@ function Console({ token, onToken, onSignOut }) {
     setPage(p)
     setNavOpen(false)
     window.history.replaceState(null, '', p === 'meetings' ? '#' : `#${p}`)
+  }
+
+  if (user.must_enroll_2fa) {
+    return <TwoFactorGate token={token} onSignOut={onSignOut}
+                          onDone={() => me(token).then((u) => { setUser(u); loadMeetings(); loadUsers() }).catch(fail)} />
   }
 
   const name = user.display_name || user.username
@@ -180,6 +208,9 @@ function Console({ token, onToken, onSignOut }) {
           </button>
         )}>
           <MenuItem icon={<Lock size={16} />} onClick={() => setChangingPw(true)}>Change password</MenuItem>
+          <MenuItem icon={<Shield size={16} />} onClick={() => setTwoFactor(true)}>
+            Two-factor sign-in{user.totp_enabled ? ' · on' : ''}
+          </MenuItem>
           <MenuItem icon={<LogOut size={16} />} onClick={onSignOut}>Sign out</MenuItem>
         </Menu>
       </div>
@@ -208,12 +239,14 @@ function Console({ token, onToken, onSignOut }) {
           ? <PeoplePage users={users} me={user} token={token} reload={loadUsers} fail={fail} />
           : page === 'security' && isAdmin
             ? <SecurityPage token={token} user={user} fail={fail} recovery={recovery} reloadRecovery={reloadRecovery}
-                            org={org} onSignOut={onSignOut} />
+                            org={org} onSignOut={onSignOut} onMeChanged={() => me(token).then(setUser).catch(fail)} />
             : <MeetingsPage meetings={meetings} live={live} token={token} org={org} reload={loadMeetings} fail={fail} isAdmin={isAdmin}
                             canCreate={isAdmin || user.role === 'host'} />}
       </div>
       <ChangePasswordModal open={changingPw} onClose={() => setChangingPw(false)} token={token} username={user.username}
                            onChanged={onToken} />
+      <TwoFactorModal open={twoFactor} onClose={() => setTwoFactor(false)} token={token} me={user}
+                      onChanged={() => me(token).then(setUser).catch(fail)} />
     </div>
   )
 }
@@ -543,6 +576,20 @@ function PeoplePage({ users, me: current, token, reload, fail }) {
   const [query, setQuery] = useState('')
   const shown = (users || []).filter((u) => `${u.display_name} ${u.username}`.toLowerCase().includes(query.trim().toLowerCase()))
 
+  async function reset2fa(u) {
+    const ok = await confirm({
+      title: `Reset two-factor for ${u.display_name || u.username}?`,
+      message: 'Use this when they have lost their phone. Two-factor is switched off and they are signed out; they can set it up again on their next sign-in.',
+      confirmLabel: 'Reset two-factor',
+    })
+    if (!ok) return
+    try {
+      await resetUser2fa(token, u.id)
+      toast({ message: 'Two-factor reset.' })
+      reload()
+    } catch (err) { fail(err) }
+  }
+
   async function remove(u) {
     const ok = await confirm({
       title: `Remove ${u.display_name || u.username}?`,
@@ -590,7 +637,7 @@ function PeoplePage({ users, me: current, token, reload, fail }) {
                       {u.display_name || u.username}
                       {u.username === current.username && <span className="subtle" style={{ fontWeight: 500 }}> · You</span>}
                     </span>
-                    <span className="row-meta subtle">@{u.username}</span>
+                    <span className="row-meta subtle">@{u.username}{u.totp_enabled ? ' · 2FA on' : ''}</span>
                   </div>
                 </div>
                 <div className="row-status">
@@ -604,6 +651,7 @@ function PeoplePage({ users, me: current, token, reload, fail }) {
                       <Button size="sm" variant="ghost" icon={<More />} onClick={toggle} aria-label={`Actions for ${u.display_name || u.username}`} />
                     )}>
                       <MenuItem icon={<Lock size={16} />} onClick={() => setResetting(u)}>Reset password</MenuItem>
+                      {u.totp_enabled && <MenuItem icon={<Shield size={16} />} onClick={() => reset2fa(u)}>Reset two-factor</MenuItem>}
                       {u.role !== 'admin' && <div className="menu-sep" />}
                       {u.role !== 'admin' && <MenuItem icon={<Trash size={16} />} danger onClick={() => remove(u)}>Remove</MenuItem>}
                     </Menu>

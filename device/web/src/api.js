@@ -49,8 +49,8 @@ export async function lobbyStatus(room, identity) {
   return api('GET', `/lobby/status?room=${encodeURIComponent(room)}&identity=${encodeURIComponent(identity)}`)
 }
 
-export async function login(username, password) {
-  return api('POST', '/login', { username, password })
+export async function login(username, password, totp) {
+  return api('POST', '/login', { username, password, totp: totp || null })
 }
 
 export async function listMeetings(token) {
@@ -179,4 +179,20 @@ export async function backupDisable(token, password) {
 
 export async function backupRestore(token, backupKey, password) {
   return api('POST', '/backup/restore', { backup_key: backupKey, password }, token)
+}
+
+export async function totpSetup(token) {
+  return api('POST', '/me/2fa/setup', undefined, token)
+}
+
+export async function totpEnable(token, code) {
+  return api('POST', '/me/2fa/enable', { code }, token)
+}
+
+export async function totpDisable(token, password, code) {
+  return api('POST', '/me/2fa/disable', { password, code }, token)
+}
+
+export async function resetUser2fa(token, id) {
+  return api('POST', `/users/${id}/2fa/reset`, undefined, token)
 }
