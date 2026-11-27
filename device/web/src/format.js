@@ -105,6 +105,13 @@ const MESSAGES = {
   'screen reset disabled': 'Resetting from the device screen has been switched off by a Client Admin.',
   'office network only': 'This only works on the office network.',
   'backup already on': 'Backups are already on.',
+  'invalid totp': 'That code is not right, or it has already been used. Wait for the next code and try again.',
+  '2fa already on': 'Two-factor sign-in is already on.',
+  'start two-factor setup first': 'Start the setup again.',
+  '2fa required by policy': 'Two-factor sign-in is required for your role on this device.',
+  '2fa is off': 'Two-factor sign-in is already off.',
+  'use your own two-factor settings': 'Use the account menu for your own two-factor settings.',
+  '2fa enrollment required': 'Set up two-factor sign-in to continue.',
   'use change password for your own account': 'Use “Change password” for your own account.',
 }
 

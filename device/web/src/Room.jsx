@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Room as LKRoom, RoomEvent, Track, DisconnectReason } from 'livekit-client'
+import { Room as LKRoom, RoomEvent, Track, DisconnectReason, ExternalE2EEKeyProvider } from 'livekit-client'
 import VideoTile from './VideoTile.jsx'
 import { ChatPanel, PeoplePanel } from './Panels.jsx'
 import { Logo, Button, Menu, MenuItem, PublicLayout, useToast, useConfirm } from './ui.jsx'
@@ -74,7 +74,15 @@ export default function Room({ session, onLeave }) {
   }, [])
 
   useEffect(() => {
-    const room = new LKRoom({ adaptiveStream: true, dynacast: true })
+    // End-to-end encrypted meeting: every frame is encrypted in this browser with the key from the
+    // invitation link, so the device relays media it cannot read.
+    let keyProvider = null
+    let worker = null
+    if (session.e2eeKey) {
+      keyProvider = new ExternalE2EEKeyProvider()
+      worker = new Worker(new URL('livekit-client/e2ee-worker', import.meta.url), { type: 'module' })
+    }
+    const room = new LKRoom({ adaptiveStream: true, dynacast: true, ...(keyProvider ? { encryption: { keyProvider, worker } } : {}) })
     roomRef.current = room
     leavingRef.current = false
     let closed = false // this connection was closed by us (unmount, leave): its events are stale
@@ -104,6 +112,10 @@ export default function Room({ session, onLeave }) {
       .on(RoomEvent.ParticipantConnected, (p) => { refresh(); playJoin(); toast({ kind: 'info', message: `${p.identity} joined`, key: 'join' }) })
       .on(RoomEvent.ParticipantDisconnected, refresh)
       .on(RoomEvent.DataReceived, onData)
+      .on(RoomEvent.EncryptionError, () => {
+        toast({ kind: 'error', key: 'e2ee', duration: 0,
+          message: 'Some audio or video cannot be decrypted. Everyone must join with the same invitation link.' })
+      })
       .on(RoomEvent.Reconnecting, () => setReconnecting(true))
       .on(RoomEvent.Reconnected, () => { setReconnecting(false); refresh() })
       .on(RoomEvent.Disconnected, (reason) => {
@@ -118,7 +130,10 @@ export default function Room({ session, onLeave }) {
     // Through the device (https) LiveKit's signalling is proxied on the same host.
     const proto = window.location.protocol === 'https:' ? 'wss' : 'ws'
     const wsUrl = session.wsUrl?.startsWith('wss://') ? session.wsUrl : `${proto}://${window.location.host}`
-    room.connect(wsUrl, session.token)
+    const ready = keyProvider
+      ? keyProvider.setKey(session.e2eeKey).then(() => room.setE2EEEnabled(true))
+      : Promise.resolve()
+    ready.then(() => room.connect(wsUrl, session.token))
       .then(async () => {
         setConnected(true)
         refresh()
@@ -136,6 +151,7 @@ export default function Room({ session, onLeave }) {
     return () => {
       closed = true
       room.disconnect()
+      worker?.terminate()
       if (roomRef.current === room) roomRef.current = null
     }
   }, [session, refresh, toast])
@@ -159,7 +175,7 @@ export default function Room({ session, onLeave }) {
           seenLobby.current.add(r.id)
           playJoin()
           toast({
-            kind: 'info', duration: 0, key: `lobby-${r.id}`, message: `${r.identity} is waiting to join`,
+            kind: 'info', duration: 0, key: `lobby-${session.room}-${r.id}`, message: `${r.identity} is waiting to join`,
             actions: [
               { label: 'Admit', primary: true, onClick: () => admit(r.id) },
               { label: 'View', onClick: () => setPanel('people') },
@@ -170,7 +186,8 @@ export default function Room({ session, onLeave }) {
     }
     load()
     const t = setInterval(load, 3000)
-    return () => { cancelled = true; clearInterval(t) }
+    // Leaving this meeting: its "is waiting to join" notices go too, so none is acted on elsewhere.
+    return () => { cancelled = true; clearInterval(t); toast.clear?.(`lobby-${session.room}-`) }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session])
 

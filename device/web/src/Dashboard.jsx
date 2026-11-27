@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   login, createMeeting, listMeetings, endMeeting, deleteMeeting, listUsers, createUser, deleteUser,
-  saveAuth, getToken, clearAuth, getUsername, me, getSettings, meetingsNow,
+  saveAuth, getToken, clearAuth, getUsername, me, getSettings, meetingsNow, resetUser2fa,
 } from './api.js'
 import {
   Logo, ThemeToggle, Button, TextInput, PasswordInput, Field, Switch, Choice, Notice, Avatar, EmptyState,
@@ -12,6 +12,8 @@ import {
   DoorIn, Menu as MenuIcon, UserPlus, Refresh, Monitor, Settings,
 } from './icons.jsx'
 import { ForgotPassword, ChangePasswordModal, ResetUserPasswordModal, SecurityPage, useRecoveryStatus } from './Recovery.jsx'
+import { TwoFactorModal, TwoFactorGate } from './TwoFactor.jsx'
+import { e2eeSupported, newMeetingKey, rememberKey, knownKey, withKey } from './e2ee.js'
 import { when, dateParts, duration, nextQuarter, randomPasscode, inviteText, friendly, sessionExpired } from './format.js'
 
 const USERNAME_RE = /^[a-z0-9][a-z0-9._-]{2,31}$/
@@ -31,6 +33,8 @@ function SignIn({ onSignedIn }) {
   const [forgot, setForgot] = useState(() => (window.location.hash === '#reset' ? 'screen' : null))
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
+  const [code, setCode] = useState('')
+  const [needCode, setNeedCode] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
 
@@ -40,15 +44,24 @@ function SignIn({ onSignedIn }) {
       setError('Enter your username and password.')
       return
     }
+    if (needCode && code.replace(/\D/g, '').length !== 6) {
+      setError('Enter the 6-digit code from your authenticator app.')
+      return
+    }
     setBusy(true)
     setError('')
     try {
-      const d = await login(username.trim().toLowerCase(), password)
+      const d = await login(username.trim().toLowerCase(), password, needCode ? code : null)
       saveAuth(d.token, d.user.username)
       onSignedIn(d.token)
     } catch (err) {
-      setError(friendly(err))
-      setPassword('')
+      if (err.message === 'totp required') {
+        setNeedCode(true)
+      } else {
+        setError(friendly(err))
+        if (needCode) setCode('')
+        else setPassword('')
+      }
     } finally {
       setBusy(false)
     }
@@ -70,9 +83,15 @@ function SignIn({ onSignedIn }) {
             <TextInput label="Username" value={username} onChange={(e) => setUsername(e.target.value)} autoFocus
                        autoComplete="username" autoCapitalize="none" spellCheck={false} />
             <PasswordInput label="Password" value={password} onChange={(e) => setPassword(e.target.value)}
-                           autoComplete="current-password" />
+                           autoComplete="current-password" disabled={needCode} />
+            {needCode && (
+              <TextInput label="Code from your authenticator app" value={code} autoFocus
+                         onChange={(e) => setCode(e.target.value.replace(/[^\d ]/g, '').slice(0, 7))}
+                         inputMode="numeric" autoComplete="one-time-code" placeholder="123 456" className="input-mono"
+                         hint="Lost your phone? A Client Admin can reset two-factor for you; admins can use a Recovery Kit code." />
+            )}
             {error && <Notice kind="error">{error}</Notice>}
-            <Button type="submit" variant="primary" size="lg" block loading={busy}>Sign in</Button>
+            <Button type="submit" variant="primary" size="lg" block loading={busy}>{needCode ? 'Verify' : 'Sign in'}</Button>
           </form>
           <p className="field-hint" style={{ textAlign: 'center', marginTop: 16 }}>
             Forgot your password? Hosts and members: ask a Client Admin.{' '}
@@ -92,6 +111,7 @@ function Console({ token, onToken, onSignOut }) {
   const toast = useToast()
   const [page, setPage] = useState(() => ({ '#people': 'people', '#security': 'security' })[window.location.hash] || 'meetings')
   const [changingPw, setChangingPw] = useState(false)
+  const [twoFactor, setTwoFactor] = useState(false)
   const [navOpen, setNavOpen] = useState(false)
   const [user, setUser] = useState({ username: getUsername(), display_name: '', role: '' })
   const [org, setOrg] = useState('')
@@ -104,6 +124,10 @@ function Console({ token, onToken, onSignOut }) {
   const fail = useCallback((err) => {
     if (sessionExpired(err)) {
       onSignOut()
+      return
+    }
+    if (err?.message === '2fa enrollment required') {
+      setUser((u) => ({ ...u, must_enroll_2fa: true }))
       return
     }
     toast({ kind: 'error', message: friendly(err) })
@@ -139,6 +163,11 @@ function Console({ token, onToken, onSignOut }) {
     setPage(p)
     setNavOpen(false)
     window.history.replaceState(null, '', p === 'meetings' ? '#' : `#${p}`)
+  }
+
+  if (user.must_enroll_2fa) {
+    return <TwoFactorGate token={token} onSignOut={onSignOut}
+                          onDone={() => me(token).then((u) => { setUser(u); loadMeetings(); loadUsers() }).catch(fail)} />
   }
 
   const name = user.display_name || user.username
@@ -180,6 +209,9 @@ function Console({ token, onToken, onSignOut }) {
           </button>
         )}>
           <MenuItem icon={<Lock size={16} />} onClick={() => setChangingPw(true)}>Change password</MenuItem>
+          <MenuItem icon={<Shield size={16} />} onClick={() => setTwoFactor(true)}>
+            Two-factor sign-in{user.totp_enabled ? ' · on' : ''}
+          </MenuItem>
           <MenuItem icon={<LogOut size={16} />} onClick={onSignOut}>Sign out</MenuItem>
         </Menu>
       </div>
@@ -208,12 +240,14 @@ function Console({ token, onToken, onSignOut }) {
           ? <PeoplePage users={users} me={user} token={token} reload={loadUsers} fail={fail} />
           : page === 'security' && isAdmin
             ? <SecurityPage token={token} user={user} fail={fail} recovery={recovery} reloadRecovery={reloadRecovery}
-                            org={org} onSignOut={onSignOut} />
+                            org={org} onSignOut={onSignOut} onMeChanged={() => me(token).then(setUser).catch(fail)} />
             : <MeetingsPage meetings={meetings} live={live} token={token} org={org} reload={loadMeetings} fail={fail} isAdmin={isAdmin}
                             canCreate={isAdmin || user.role === 'host'} />}
       </div>
       <ChangePasswordModal open={changingPw} onClose={() => setChangingPw(false)} token={token} username={user.username}
                            onChanged={onToken} />
+      <TwoFactorModal open={twoFactor} onClose={() => setTwoFactor(false)} token={token} me={user}
+                      onChanged={() => me(token).then(setUser).catch(fail)} />
     </div>
   )
 }
@@ -242,15 +276,28 @@ function MeetingsPage({ meetings, live, token, org, reload, fail, isAdmin, canCr
 
   const shown = groups[tab].filter((m) => m.title.toLowerCase().includes(query.trim().toLowerCase()))
 
+  function shareUrl(m) {
+    const key = m.e2ee ? knownKey(m.room_name) : ''
+    if (m.e2ee && !key) {
+      toast({ kind: 'error', message: 'This browser does not have this meeting’s encryption key. Use the invitation saved when it was created.' })
+      return null
+    }
+    return withKey(m.url || m.local_url, key)
+  }
+
   async function copyInvite(m) {
-    const ok = await copyText(inviteText({ title: m.title, url: m.url || m.local_url, scheduled_at: m.scheduled_at,
+    const url = shareUrl(m)
+    if (!url) return
+    const ok = await copyText(inviteText({ title: m.title, url, scheduled_at: m.scheduled_at,
       duration_minutes: m.duration_minutes, org }))
     toast(ok ? { message: m.has_passcode ? 'Invitation copied. Send the passcode separately.' : 'Invitation copied.' }
       : { kind: 'error', message: 'Could not copy. Select the link and copy it manually.' })
   }
 
   async function copyLink(m) {
-    const ok = await copyText(m.url || m.local_url)
+    const url = shareUrl(m)
+    if (!url) return
+    const ok = await copyText(url)
     toast(ok ? { message: 'Meeting link copied.' } : { kind: 'error', message: 'Could not copy the link.' })
   }
 
@@ -346,7 +393,9 @@ function MeetingRow({ m, live, onCopyInvite, onCopyLink, onEnd, onDelete }) {
   const ended = m.status === 'ended'
   const parts = dateParts(m.scheduled_at)
   const mine = m.can_host
-  const start = () => { window.location.href = `/m/${encodeURIComponent(m.room_name)}?${mine ? 'host' : 'staff'}=1` }
+  const start = () => {
+    window.location.href = withKey(`/m/${encodeURIComponent(m.room_name)}?${mine ? 'host' : 'staff'}=1`, m.e2ee ? knownKey(m.room_name) : '')
+  }
   return (
     <div className="list-row">
       <div className="row-main">
@@ -360,6 +409,7 @@ function MeetingRow({ m, live, onCopyInvite, onCopyLink, onEnd, onDelete }) {
             <span className="chip"><Clock size={14} />{when(m.scheduled_at)} · {duration(m.duration_minutes)}</span>
             {m.has_passcode && <span className="chip"><Lock size={14} />Passcode</span>}
             {m.lobby && <span className="chip hide-sm"><Shield size={14} />Waiting room</span>}
+            {m.e2ee && <span className="chip hide-sm"><Lock size={14} />End-to-end encrypted</span>}
             {!mine && m.host_name && <span className="chip hide-sm"><People size={14} />Host: {m.host_name}</span>}
           </span>
         </div>
@@ -403,11 +453,13 @@ function NewMeetingModal({ open, onClose, token, onCreated, fail }) {
   const [passcode, setPasscode] = useState(randomPasscode)
   const [lobby, setLobby] = useState(true)
   const [show, setShow] = useState(true)
+  const [e2ee, setE2ee] = useState(false)
   const [busy, setBusy] = useState(false)
   const [errors, setErrors] = useState({})
 
   useEffect(() => {
     if (!open) return
+    setE2ee(false)
     setTitle('')
     setScheduled(nextQuarter())
     setDur(60)
@@ -427,15 +479,18 @@ function NewMeetingModal({ open, onClose, token, onCreated, fail }) {
     if (Object.keys(errs).length) return
     setBusy(true)
     try {
+      const key = e2ee ? newMeetingKey() : null
       const m = await createMeeting(token, {
         title: title.trim(),
         scheduled_at: scheduled ? new Date(scheduled).toISOString() : null,
         passcode: usePass ? passcode : null,
         lobby,
+        e2ee,
         show_on_screen: show,
         duration_minutes: Number(dur),
       })
-      onCreated({ ...m, passcode: usePass ? passcode : null })
+      if (key) rememberKey(m.room_name, key)
+      onCreated({ ...m, passcode: usePass ? passcode : null, e2eeKey: key })
     } catch (err) {
       fail(err)
     } finally {
@@ -478,6 +533,10 @@ function NewMeetingModal({ open, onClose, token, onCreated, fail }) {
                   description="Guests wait until the host lets them in." />
           <Switch checked={show} onChange={setShow} label="Show on the room screen"
                   description="Listed on the device's “Meetings in progress” page while it runs." />
+          <Switch checked={e2ee} onChange={setE2ee} disabled={!e2eeSupported()} label="End-to-end encryption"
+                  description={e2eeSupported()
+                    ? 'Audio, video and screen sharing are encrypted in each browser; not even this device can see them. The key is only in the invitation link.'
+                    : 'Not available in this browser. Use the latest Chrome, Edge, Firefox or Safari to create encrypted meetings.'} />
         </div>
       </form>
     </Modal>
@@ -487,7 +546,7 @@ function NewMeetingModal({ open, onClose, token, onCreated, fail }) {
 function MeetingReadyModal({ meeting, org, onClose }) {
   const toast = useToast()
   if (!meeting) return null
-  const url = meeting.url || meeting.local_url
+  const url = withKey(meeting.url || meeting.local_url, meeting.e2eeKey)
   const copy = async (text, what) => {
     const ok = await copyText(text)
     toast(ok ? { message: `${what} copied.` } : { kind: 'error', message: 'Could not copy. Select the text and copy it manually.' })
@@ -495,7 +554,7 @@ function MeetingReadyModal({ meeting, org, onClose }) {
   return (
     <Modal open onClose={onClose} title="Meeting created" description={meeting.title}
            footer={<>
-             <Button onClick={() => { window.location.href = `/m/${encodeURIComponent(meeting.room_name)}?host=1` }}
+             <Button onClick={() => { window.location.href = withKey(`/m/${encodeURIComponent(meeting.room_name)}?host=1`, meeting.e2eeKey) }}
                      icon={<DoorIn size={16} />}>Start now</Button>
              <Button variant="primary" icon={<Copy size={16} />}
                      onClick={() => copy(inviteText({ ...meeting, url, org }), 'Invitation')}>Copy invitation</Button>
@@ -522,6 +581,9 @@ function MeetingReadyModal({ meeting, org, onClose }) {
         {meeting.passcode && (
           <Notice kind="warning">Save the passcode now. For security it is not stored in readable form, so it cannot be shown again.</Notice>
         )}
+        {meeting.e2eeKey && (
+          <Notice kind="info">End-to-end encrypted. The encryption key is the part of the link after “#k=”; it is never sent to the device. Share the whole link, and copy the invitation now: only this browser keeps a copy of the key.</Notice>
+        )}
       </div>
     </Modal>
   )
@@ -542,6 +604,20 @@ function PeoplePage({ users, me: current, token, reload, fail }) {
   const [resetting, setResetting] = useState(null)
   const [query, setQuery] = useState('')
   const shown = (users || []).filter((u) => `${u.display_name} ${u.username}`.toLowerCase().includes(query.trim().toLowerCase()))
+
+  async function reset2fa(u) {
+    const ok = await confirm({
+      title: `Reset two-factor for ${u.display_name || u.username}?`,
+      message: 'Use this when they have lost their phone. Two-factor is switched off and they are signed out; they can set it up again on their next sign-in.',
+      confirmLabel: 'Reset two-factor',
+    })
+    if (!ok) return
+    try {
+      await resetUser2fa(token, u.id)
+      toast({ message: 'Two-factor reset.' })
+      reload()
+    } catch (err) { fail(err) }
+  }
 
   async function remove(u) {
     const ok = await confirm({
@@ -590,7 +666,7 @@ function PeoplePage({ users, me: current, token, reload, fail }) {
                       {u.display_name || u.username}
                       {u.username === current.username && <span className="subtle" style={{ fontWeight: 500 }}> · You</span>}
                     </span>
-                    <span className="row-meta subtle">@{u.username}</span>
+                    <span className="row-meta subtle">@{u.username}{u.totp_enabled ? ' · 2FA on' : ''}</span>
                   </div>
                 </div>
                 <div className="row-status">
@@ -604,6 +680,7 @@ function PeoplePage({ users, me: current, token, reload, fail }) {
                       <Button size="sm" variant="ghost" icon={<More />} onClick={toggle} aria-label={`Actions for ${u.display_name || u.username}`} />
                     )}>
                       <MenuItem icon={<Lock size={16} />} onClick={() => setResetting(u)}>Reset password</MenuItem>
+                      {u.totp_enabled && <MenuItem icon={<Shield size={16} />} onClick={() => reset2fa(u)}>Reset two-factor</MenuItem>}
                       {u.role !== 'admin' && <div className="menu-sep" />}
                       {u.role !== 'admin' && <MenuItem icon={<Trash size={16} />} danger onClick={() => remove(u)}>Remove</MenuItem>}
                     </Menu>

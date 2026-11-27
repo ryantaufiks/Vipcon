@@ -10,6 +10,7 @@ import { Button, TextInput, PasswordInput, Notice, Modal, Switch, Spinner, useTo
 import { Copy, Download, Shield, Monitor, Refresh, Clock } from './icons.jsx'
 import { friendly } from './format.js'
 import { BackupCard } from './Backup.jsx'
+import { TwoFactorPolicy } from './TwoFactor.jsx'
 
 const MIN_PASSWORD = 10
 
@@ -288,6 +289,11 @@ const EVENT_LABELS = {
   'backup.enabled': 'Turned on off-site backup',
   'backup.disabled': 'Turned off off-site backup',
   'backup.restored': 'Restored from a backup',
+  '2fa.enabled': 'Turned on two-factor sign-in',
+  '2fa.disabled': 'Turned off two-factor sign-in',
+  '2fa.reset_by_admin': 'Reset two-factor sign-in',
+  '2fa.required': 'Required two-factor for admins and hosts',
+  '2fa.not_required': 'Made two-factor optional',
 }
 
 export function useRecoveryStatus(token, isAdmin) {
@@ -300,7 +306,7 @@ export function useRecoveryStatus(token, isAdmin) {
   return [status, reload]
 }
 
-export function SecurityPage({ token, user, fail, recovery, reloadRecovery, org, onSignOut }) {
+export function SecurityPage({ token, user, fail, recovery, reloadRecovery, org, onSignOut, onMeChanged }) {
   const toast = useToast()
   const [screenOn, setScreenOn] = useState(null)
   const [events, setEvents] = useState(null)
@@ -379,6 +385,8 @@ export function SecurityPage({ token, user, fail, recovery, reloadRecovery, org,
         </Button></div>
         <p className="field-hint" style={{ margin: 0 }}>A new kit replaces the old one: the old codes stop working. Tip: add a second Client Admin on the People page, so either of you can reset the other’s password.</p>
       </div>
+
+      <TwoFactorPolicy token={token} fail={fail} me={user} onChanged={() => { loadEvents(); onMeChanged?.() }} />
 
       <BackupCard token={token} fail={fail} org={org} onChanged={loadEvents}
                   onRestored={() => { toast({ message: 'Restored. Sign in with an account from the backup.' }); onSignOut() }} />

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { joinRoom, hostToken, lobbyStatus, getToken, getUsername, meetingInfo, me } from './api.js'
+import { e2eeSupported, takeKeyFromLink, normalizeKey } from './e2ee.js'
 import { PublicLayout, Button, TextInput, PasswordInput, Field, Notice, Avatar, Spinner } from './ui.jsx'
 import { Mic, Camera, Lock, Shield, Clock, Alert, ArrowLeft } from './icons.jsx'
 import { when, duration, friendly } from './format.js'
@@ -146,6 +147,8 @@ export default function PreJoin({ room, signedIn, asHost, onJoined }) {
   const [info, setInfo] = useState(null) // null loading, {error} when the link is invalid
   const [name, setName] = useState(() => (signedIn ? getUsername() : localStorage.getItem(NAME_KEY) || ''))
   const [passcode, setPasscode] = useState('')
+  const [e2eeKey, setE2eeKey] = useState(() => takeKeyFromLink(room))
+  const [keyError, setKeyError] = useState('')
   const [busy, setBusy] = useState(false)
   const [waiting, setWaiting] = useState(false)
   const [error, setError] = useState('')
@@ -166,8 +169,9 @@ export default function PreJoin({ room, signedIn, asHost, onJoined }) {
       room, identity: name.trim(), token: data.token, wsUrl: data.ws_url, isHost: !!data.host, signedIn,
       title: info?.title || '', micOn: media.micOn, camOn: media.camOn,
       audioId: media.audioId, videoId: media.videoId, joinedAt: Date.now(),
+      e2eeKey: info?.e2ee ? normalizeKey(e2eeKey) : null,
     })
-  }, [media, onJoined, room, name, signedIn, info])
+  }, [media, onJoined, room, name, signedIn, info, e2eeKey])
 
   async function submit(e) {
     e.preventDefault()
@@ -178,6 +182,14 @@ export default function PreJoin({ room, signedIn, asHost, onJoined }) {
     }
     setNameError('')
     setError('')
+    if (info?.e2ee) {
+      if (!e2eeSupported()) return
+      if (normalizeKey(e2eeKey).length < 20) {
+        setKeyError('Paste the meeting key, or open the full invitation link.')
+        return
+      }
+      setKeyError('')
+    }
     if (!signedIn) localStorage.setItem(NAME_KEY, n)
     setBusy(true)
     try {
@@ -195,6 +207,10 @@ export default function PreJoin({ room, signedIn, asHost, onJoined }) {
     }
   }
 
+  // The poll must not restart on every render (the mic level meter re-renders constantly): a restart
+  // would drop an answer that is on its way. enterRef always calls the latest enter().
+  const enterRef = useRef(enter)
+  enterRef.current = enter
   useEffect(() => {
     if (!waiting) return
     let cancelled = false
@@ -202,7 +218,7 @@ export default function PreJoin({ room, signedIn, asHost, onJoined }) {
       try {
         const data = await lobbyStatus(room, name.trim())
         if (cancelled) return
-        if (data.token) enter(data)
+        if (data.token) enterRef.current(data)
         else if (data.status === 'rejected') {
           setWaiting(false)
           setError('The host declined your request to join.')
@@ -212,7 +228,7 @@ export default function PreJoin({ room, signedIn, asHost, onJoined }) {
     poll()
     const t = setInterval(poll, 2000)
     return () => { cancelled = true; clearInterval(t) }
-  }, [waiting, room, name, enter])
+  }, [waiting, room, name])
 
   if (info?.error === 'gone') {
     return (
@@ -242,6 +258,7 @@ export default function PreJoin({ room, signedIn, asHost, onJoined }) {
                   {info.scheduled_at && <span className="chip"><Clock size={14} />{when(info.scheduled_at)} · {duration(info.duration_minutes)}</span>}
                   {info.has_passcode && !signedIn && <span className="chip"><Lock size={14} />Passcode required</span>}
                   {info.lobby && !signedIn && <span className="chip"><Shield size={14} />The host admits guests</span>}
+                  {info.e2ee && <span className="chip"><Lock size={14} />End-to-end encrypted</span>}
                 </div>
               )}
               {info.error && <div style={{ marginTop: 12 }}><Notice kind="warning">{info.error}</Notice></div>}
@@ -263,8 +280,17 @@ export default function PreJoin({ room, signedIn, asHost, onJoined }) {
                 <PasswordInput label="Passcode" value={passcode} onChange={(e) => setPasscode(e.target.value)}
                                autoComplete="off" hint="From your meeting invitation." />
               )}
+              {info?.e2ee && !e2eeSupported() && (
+                <Notice kind="error">This meeting is end-to-end encrypted, and this browser cannot join encrypted meetings. Use the latest Chrome, Edge, Firefox or Safari.</Notice>
+              )}
+              {info?.e2ee && e2eeSupported() && !takeKeyFromLink(room) && (
+                <TextInput label="Meeting key" value={e2eeKey} onChange={(e) => setE2eeKey(e.target.value)} className="input-mono"
+                           autoComplete="off" spellCheck={false} error={keyError}
+                           hint="This meeting is end-to-end encrypted. Open the full invitation link, or paste it (or its key) here." />
+              )}
               {error && <Notice kind="error">{error}</Notice>}
-              <Button type="submit" variant="primary" size="lg" block loading={busy} disabled={info?.locked}>
+              <Button type="submit" variant="primary" size="lg" block loading={busy}
+                      disabled={info?.locked || (info?.e2ee && !e2eeSupported())}>
                 {asHost ? 'Start meeting' : signedIn ? 'Join meeting' : info?.lobby ? 'Ask to join' : 'Join meeting'}
               </Button>
               {info?.locked && <p className="field-hint">The host has locked this meeting.</p>}
